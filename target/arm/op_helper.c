@@ -991,3 +991,20 @@ void HELPER(dc_zva)(CPUARMState *env, uint64_t vaddr_in)
     memset(g2h(vaddr), 0, blocklen);
 #endif
 }
+
+/************************** Custom helper functions ***************************/
+
+// include extra header files
+#include "cache-trace.h"
+#include "icache.h"
+
+void HELPER(call_icache)(uint32_t addr) {
+    icache_load(addr);
+}
+
+void HELPER(call_cycle)(uint32_t insn_ticks) {
+    sim_time += insn_ticks;
+}
+
+
+/************************ End custom helper functions *************************/

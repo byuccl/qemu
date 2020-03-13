@@ -694,6 +694,15 @@ DEF_HELPER_FLAGS_2(frint64_s, TCG_CALL_NO_RWG, f32, f32, ptr)
 DEF_HELPER_FLAGS_2(frint32_d, TCG_CALL_NO_RWG, f64, f64, ptr)
 DEF_HELPER_FLAGS_2(frint64_d, TCG_CALL_NO_RWG, f64, f64, ptr)
 
+/********************** Generate custom helper functions **********************/
+DEF_HELPER_1(call_icache, void, i32)
+DEF_HELPER_1(call_cycle, void, i32)
+DEF_HELPER_1(dump_pc, void, i32)
+DEF_HELPER_3(dump_memtrace, void, i32, i32, i32)
+
+/************************ End custom helper functions *************************/
+
+
 #ifdef TARGET_AARCH64
 #include "helper-a64.h"
 #include "helper-sve.h"

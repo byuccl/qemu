@@ -37,6 +37,8 @@
 #include "trace-tcg.h"
 #include "exec/log.h"
 
+// extra stuff for the cache emulation
+#include "cache-trace.h"
 
 #define ENABLE_ARCH_4T    arm_dc_feature(s, ARM_FEATURE_V4T)
 #define ENABLE_ARCH_5     arm_dc_feature(s, ARM_FEATURE_V5)
@@ -10501,6 +10503,56 @@ static bool trans_IT(DisasContext *s, arg_IT *a)
     return true;
 }
 
+/******************* Helper functions for cache emulation ********************/
+
+/*
+ * Records the current cycle count
+ */
+void wrapper_call_cycle(unsigned int insn_ticks);
+void wrapper_call_cycle(unsigned int insn_ticks) {
+    // create a new temporary
+    TCGv tmp = tcg_temp_new();
+    // put the value in this temp register
+    tcg_gen_movi_i32(tmp, insn_ticks);
+    // call the helper function
+    gen_helper_call_cycle(tmp);
+    // free the temporary
+    tcg_temp_free(tmp);
+}
+
+/*
+ * Updates the state of the icache representation
+ */
+void wrapper_call_icache(unsigned int pc);
+void wrapper_call_icache(unsigned int pc) {
+    // create a new temporary
+    TCGv tmp = tcg_temp_new();
+    // move value into temp register
+    tcg_gen_movi_i32(tmp, pc);
+    // call helper function
+    gen_helper_call_icache(tmp);
+    // free the temporary
+    tcg_temp_free(tmp);
+}
+
+/*
+ * Record the current PC value
+ */
+void wrapper_dump_pc(unsigned int address);
+void wrapper_dump_pc(unsigned int address) {
+    // create a new temporary
+    TCGv tmp = tcg_temp_new();
+    // move value into temp register
+    tcg_gen_movi_i32(tmp, address);
+    // call helper function
+    gen_helper_dump_pc(tmp);
+    // free the temporary
+    tcg_temp_free(tmp);
+}
+
+/**************************** end helper functions ****************************/
+
+
 /*
  * Legacy decoder.
  */
@@ -10517,6 +10569,16 @@ static void disas_arm_insn(DisasContext *s, unsigned int insn)
                            default_exception_el(s));
         return;
     }
+
+    //////////////////////// Call helper functions /////////////////////////
+    // get the cycle count of the current instruction
+    unsigned int insn_ticks = 0;
+    insn_ticks = get_insn_ticks(insn);
+    // wrapper call for storing cycle count
+    wrapper_call_cycle(insn_ticks);
+    // update the i-cache
+    wrapper_call_icache(s->pc_curr);
+    ////////////////////////////////////////////////////////////////////////
 
     if (cond == 0xf) {
         /* In ARMv3 and v4 the NV condition is UNPREDICTABLE; we

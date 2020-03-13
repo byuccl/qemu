@@ -11518,3 +11518,45 @@ void aarch64_sve_change_el(CPUARMState *env, int old_el,
     }
 }
 #endif
+
+
+/************************** Custom helper functions ***************************/
+
+// shared variables for printing
+#define MEM_PAGE_SIZE 4096
+static FILE* __memFile = NULL;
+static char __memFile_buf[MEM_PAGE_SIZE];
+
+// record the value of the PC
+void HELPER(dump_pc)(uint32_t pc) {
+    // open the file if we haven't already
+    if (__memFile == NULL) {
+        __memFile = fopen("cache-trace.log", "w");
+        // set to line buffering mode
+        setvbuf(__memFile, __memFile_buf, _IOLBF, sizeof(__memFile_buf));
+    }
+    // write pc to file
+    fprintf(__memFile, "i 0x%X 4\n", pc);
+    fflush(__memFile);
+}
+
+/*
+ * generates trace file for cache simulation
+ * output is    X: YYYYYYY Z
+ * where X is type, Y is address, and Z is size
+ * type can be r=read, w=write
+ */
+void HELPER(dump_memtrace)(uint32_t addr, uint32_t load, uint32_t size) {
+    // open the file if we haven't already
+    if (__memFile == NULL) {
+        __memFile = fopen("cache-trace.log", "w");
+        // set to line buffering mode
+        setvbuf(__memFile, __memFile_buf, _IOLBF, sizeof(__memFile_buf));
+    }
+    // log the transaction
+    fprintf(__memFile, "%c: 0x%X %d\n", (load)?'r':'w', addr, size);
+    fflush(__memFile);
+}
+
+
+/************************ End custom helper functions *************************/

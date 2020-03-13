@@ -3,9 +3,10 @@ README
 ===========
 
 This branch is an attempt to recreate and expand on the work done in this paper:
-Cache Simulation for Instruction Set Simulator QEMU
 
-* `<https://ieeexplore.ieee.org/document/6945730/>`_
+* `Cache Simulation for Instruction Set Simulator QEMU <https://ieeexplore.ieee.org/document/6945730/>`_
+
+This branch is under active development, and so may not work properly.  Stable(?) releases will be tagged.
 
 To read the original README file, see the master branch
 
@@ -38,6 +39,9 @@ The steps to build QEMU that we use are:
   make -j4
   make install
 
+You may also wish to add the flag ``--enable-profiler``
+
+To build only for this target for the first time will take 1-3 minutes, depending on your processor and internet connection.
 
 
 More Information
