@@ -2932,3 +2932,23 @@ void hmp_info_memory_size_summary(Monitor *mon, const QDict *qdict)
     }
     hmp_handle_error(mon, &err);
 }
+
+/*
+ * Get a random address in the icache.
+ */
+void hmp_get_icache_addr(Monitor *mon, const QDict *qdict) {
+  IcacheAddr *info;
+  Error *err = NULL;
+
+  info = qmp_get_icache_addr(&err);
+  if (err) {
+      monitor_printf(mon, "Could not query icache\n");
+      error_free(err);
+      return;
+  }
+
+  monitor_printf(mon, "addr: 0x%08lX, row: 0x%lX, way: 0x%lX, valid: %s\n",
+      info->addr, info->row, info->way, (info->valid)? "yes" : "no");
+
+  qapi_free_IcacheAddr(info);
+}

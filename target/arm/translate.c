@@ -11397,6 +11397,9 @@ void gen_intermediate_code(CPUState *cpu, TranslationBlock *tb, int max_insns)
     DisasContext dc;
     const TranslatorOps *ops = &arm_translator_ops;
 
+    // stupid hello world helper function
+    // gen_helper_hello_world();
+
     if (FIELD_EX32(tb->flags, TBFLAG_A32, THUMB)) {
         ops = &thumb_translator_ops;
     }

@@ -1753,3 +1753,37 @@
 ##
 { 'command': 'query-vm-generation-id', 'returns': 'GuidInfo' }
 
+
+##
+# @hello-world:
+#
+# Print hello message to console.
+#
+# Since 4.2
+##
+{ 'command': 'hello-world' }
+
+
+##
+# @IcacheAddr:
+#
+# Random valid icache address
+#
+# @addr: 32 bit integer address
+# @row: cache row
+# @way: cache way (set)
+# @valid: has this entry ever been written since reset?
+#
+# Since 4.2 (ccl)
+##
+{ 'struct': 'IcacheAddr',
+  'data': {'addr': 'int', 'row': 'int', 'way': 'int', 'valid': 'int'} }
+
+##
+# @get-icache-addr:
+#
+# Ask for a random address in the icache.
+#
+# Since 4.2 (ccl)
+##
+{ 'command': 'get-icache-addr', 'returns': 'IcacheAddr' }

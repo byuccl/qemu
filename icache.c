@@ -1,6 +1,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <stdint.h>
+
+#include "qemu/osdep.h"
+#include "qapi/error.h"
+#include "qapi/qapi-commands-misc.h"
 
 #include "cache-common.h"
 #include "icache.h"
@@ -105,6 +110,15 @@ void icache_stats(void)
   printf("Icache hits   %10lu %6.2f%%\n", hits, hit_per);
   printf("Icache misses %10lu %6.2f%%\n", misses, miss_per);
   printf("Icache total  %10lu\n", hits + misses);
+
+  // also write out to file
+  FILE* cache_file = NULL;
+  cache_file = fopen("icache-stats.log", "w");
+  fprintf(cache_file, "Icache hits   %10lu %6.2f%%\n", hits, hit_per);
+  fprintf(cache_file, "Icache misses %10lu %6.2f%%\n", misses, miss_per);
+  fprintf(cache_file, "Icache total  %10lu\n", hits + misses);
+  fflush(cache_file);
+  fclose(cache_file);
 }
 
 
@@ -167,4 +181,28 @@ void icache_load(uint32_t addr) {
   }
 
   icache.table[row][way] = cache_addr;
+}
+
+/*
+ * QAPI function to ask for a random address in the cache.
+ * The build system generates all of the necessary types.
+ */
+IcacheAddr* qmp_get_icache_addr(Error **errp) {
+  IcacheAddr* info;
+
+  info = (IcacheAddr*)g_malloc0(sizeof(*info));
+
+  int randWay, randRow;
+
+  // get a random row and way
+  randRow = rand() % icache.rows;
+  randWay = rand() % icache.ways;
+
+  // access the cache table
+  info->addr = icache.table[randRow][randWay];
+  info->row = randRow;
+  info->way = randWay;
+  info->valid = (info->addr != (unsigned int)(~0));
+
+  return info;
 }

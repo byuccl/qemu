@@ -107,6 +107,18 @@ void dcache_stats(void)
   printf("Dcache hits   %10lu %6.2f%%\n", hits, hit_per);
   printf("Dcache misses %10lu %6.2f%%\n", misses, miss_per);
   printf("Dcache total  %10lu\n", hits + misses);
+
+  // also write out to file
+  FILE* cache_file = NULL;
+  cache_file = fopen("dcache-stats.log", "w");
+  fprintf(cache_file, "Simulation cycle is %ld\n", sim_time);
+  fprintf(cache_file, "\n");
+  fprintf(cache_file, "***Cache simulation***\n");
+  fprintf(cache_file, "Dcache hits   %10lu %6.2f%%\n", hits, hit_per);
+  fprintf(cache_file, "Dcache misses %10lu %6.2f%%\n", misses, miss_per);
+  fprintf(cache_file, "Dcache total  %10lu\n", hits + misses);
+  fflush(cache_file);
+  fclose(cache_file);
 }
 
 

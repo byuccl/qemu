@@ -699,6 +699,8 @@ DEF_HELPER_1(call_icache, void, i32)
 DEF_HELPER_1(call_cycle, void, i32)
 DEF_HELPER_1(dump_pc, void, i32)
 DEF_HELPER_3(dump_memtrace, void, i32, i32, i32)
+// stupid hello world helper function
+DEF_HELPER_0(hello_world, void)
 
 /************************ End custom helper functions *************************/
 

@@ -11558,5 +11558,10 @@ void HELPER(dump_memtrace)(uint32_t addr, uint32_t load, uint32_t size) {
     fflush(__memFile);
 }
 
+// stupid hello world helper function
+void HELPER(hello_world)(void) {
+    printf("Hello there!\n");
+}
+
 
 /************************ End custom helper functions *************************/
