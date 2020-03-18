@@ -6,6 +6,8 @@
 #include "dcache.h"
 #include "cache-trace.h"
 
+// #define DCACHE_PRINT_STATS
+
 typedef struct Dcache {
   int		size;
   int		ways;
@@ -28,7 +30,9 @@ typedef struct Dcache {
 Dcache dcache;
 
 // private functions
+#ifdef DCACHE_PRINT_STATS
 void dcache_stats(void);
+#endif
 void dcache_free(void);
 void dcache_cleanup(void);
 
@@ -89,6 +93,7 @@ void dcache_init(int size, int ways, int line_size, int replace_policy,
 }
 
 
+#ifdef DCACHE_PRINT_STATS
 void dcache_stats(void)
 {
   uint64_t hits = dcache.load_hits + dcache.store_hits;
@@ -120,6 +125,7 @@ void dcache_stats(void)
   fflush(cache_file);
   fclose(cache_file);
 }
+#endif
 
 
 void dcache_free(void)
@@ -133,7 +139,9 @@ void dcache_free(void)
 
 void dcache_cleanup(void)
 {
+#ifdef DCACHE_PRINT_STATS
   dcache_stats();
+#endif
   dcache_free();
 }
 

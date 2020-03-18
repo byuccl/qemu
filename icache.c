@@ -11,6 +11,8 @@
 #include "icache.h"
 #include "cache-trace.h"
 
+// #define ICACHE_PRINT_STATS
+
 // internal representation of the icache
 typedef struct Icache {
   int		size;
@@ -34,7 +36,9 @@ typedef struct Icache {
 Icache icache;
 
 // function prototypes
+#ifdef ICACHE_PRINT_STATS
 void icache_stats(void);
+#endif
 void icache_free(void);
 void icache_cleanup(void);
 
@@ -95,6 +99,7 @@ void icache_init(int size, int ways, int line_size, int replace_policy,
 }
 
 
+#ifdef ICACHE_PRINT_STATS
 void icache_stats(void)
 {
   uint64_t hits = icache.load_hits + icache.store_hits;
@@ -120,6 +125,7 @@ void icache_stats(void)
   fflush(cache_file);
   fclose(cache_file);
 }
+#endif
 
 
 void icache_free(void)
@@ -133,7 +139,9 @@ void icache_free(void)
 
 void icache_cleanup(void)
 {
+#ifdef ICACHE_PRINT_STATS
   icache_stats();
+#endif
   icache_free();
 }
 
