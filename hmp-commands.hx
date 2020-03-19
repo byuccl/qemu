@@ -1933,19 +1933,6 @@ Set QOM property @var{property} of object at location @var{path} to value @var{v
 ETEXI
 
     {
-        .name       = "get-icache-addr",
-        .args_type  = "",
-        .params     = "",
-        .help       = "Get random icache address",
-        .cmd        = hmp_get_icache_addr,
-    },
-
-STEXI
-@item get_icache_addr
-Get random icache address
-ETEXI
-
-    {
         .name       = "info",
         .args_type  = "item:s?",
         .params     = "[subcommand]",

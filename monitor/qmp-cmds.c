@@ -413,9 +413,3 @@ MemoryInfo *qmp_query_memory_size_summary(Error **errp)
 
     return mem_info;
 }
-
-// testing adding a new QMP command
-void qmp_hello_world(Error **errp)
-{
-    printf("Hello there!\n");
-}

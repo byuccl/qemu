@@ -4,6 +4,10 @@ This is a simple guide of how I added new commands to the Qemu command interface
 
 Based on [this link](https://github.com/qemu/qemu/blob/master/docs/devel/writing-qmp-commands.txt)
 
+See also:
+ - [Qemu QMP Reference Manual](https://www.qemu.org/docs/master/qemu-qmp-ref.html)
+ - [QMP on the Qemu wiki](https://wiki.qemu.org/Documentation/QMP)
+
 My function requests a random address from the Instruction cache.
 
 ---------------------

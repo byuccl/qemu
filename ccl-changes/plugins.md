@@ -31,4 +31,17 @@ This loads the plugin, enables plugin logging, and redirects it to a file named 
 Details about writing scripts
 =================================
 
-Under construction, see the [Official Documentation](https://qemu.readthedocs.io/en/stable/devel/tcg-plugins.html) for now
+Under construction, see the [Official Documentation](https://qemu.readthedocs.io/en/stable/devel/tcg-plugins.html) for now.
+
+
+Installing a plugin
+----------------------
+
+If there is an error while running `qemu_plugin_install`, return `!0`.
+
+
+
+More Resources
+=================
+
+There is some discussion of how the TCG implements the plugin functionality in the comments in the file `accel/tcg/plugin-gen.c`

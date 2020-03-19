@@ -13,6 +13,9 @@
 
 #include <qemu-plugin.h>
 
+#include "icache.h"
+#include "injection.h"
+
 // required export for it to build properly
 QEMU_PLUGIN_EXPORT int qemu_plugin_version = QEMU_PLUGIN_VERSION;
 
@@ -31,9 +34,9 @@ static uint64_t load_count = 0;
 static uint64_t store_count = 0;
 
 static const char* ld_prefix_lower = "ld";
-// static const char* ld_prefix_upper = "LD";
-static const char* str_prefix_lower = "str";
-// static const char* str_prefix_upper = "STR";
+static const char* str_prefix_lower = "st";
+
+static injection_plan_t plan;
 
 
 /********************************* functions **********************************/
@@ -74,8 +77,9 @@ static void put_cbs_in_tbs(qemu_plugin_id_t id, struct qemu_plugin_tb* tb) {
                                         QEMU_PLUGIN_CB_NO_REGS,
                                         QEMU_PLUGIN_MEM_R,
                                         (void*)true);
-        } else if (memcmp(disas_str, str_prefix_lower, 3) == 0) {
-            // register a callback with loading
+        } else if (memcmp(disas_str, str_prefix_lower, 2) == 0) {
+            // register a callback with storing
+            // these are registering, but the callbacks aren't being called
             qemu_plugin_register_vcpu_mem_cb(insn, parse_mem,
                                         QEMU_PLUGIN_CB_NO_REGS,
                                         QEMU_PLUGIN_MEM_R,
@@ -94,6 +98,7 @@ static void put_cbs_in_tbs(qemu_plugin_id_t id, struct qemu_plugin_tb* tb) {
  */
 static void parse_instruction(unsigned int vcpu_index, void* userdata) {
     insn_count += 1;
+    icache_load((uint64_t)userdata);
 }
 
 
@@ -114,7 +119,6 @@ static void parse_mem(unsigned int vcpu_index, qemu_plugin_meminfo_t info,
     if (is_load) {
         load_count += 1;
     } else {
-        // these aren't registering yet
         store_count += 1;
     }
 }
@@ -123,6 +127,12 @@ static void parse_mem(unsigned int vcpu_index, qemu_plugin_meminfo_t info,
 /*
  * Register the plugin.
  * This is kind of like "main".
+ * Arguments:
+ *  sleepCycles - the number of cycles to wait before injecting a fault
+ *  cacheRow    - the row in the cache to inject fault
+ *  cacheSet    - which set block
+ *  cacheBit    - which bit in the block
+ *  doTag       - if the bit should be in the tag bits instead of data (NYI)
  */
 QEMU_PLUGIN_EXPORT int qemu_plugin_install(qemu_plugin_id_t id,
                                             const qemu_info_t* info,
@@ -130,6 +140,43 @@ QEMU_PLUGIN_EXPORT int qemu_plugin_install(qemu_plugin_id_t id,
 {
     // parse arguments to the plugin
     // pretty sure argv[0] is NOT the name of the program, like normal
+    uint64_t sleepCycles = 0;
+    // have to be 64 bit so can use stroul
+    uint64_t cacheRow, cacheSet, cacheBit;
+
+    // based on example in howvec.c
+    for (int i = 0; i < argc; i++) {
+        char* p = argv[i];
+        switch (i) {
+            case 0:
+                sleepCycles = strtoul(p, NULL, 10);
+                break;
+            case 1:
+                cacheRow = strtoul(p, NULL, 10);
+                break;
+            case 2:
+                cacheSet = strtoul(p, NULL, 10);
+                break;
+            case 3:
+                cacheBit = strtoul(p, NULL, 10);
+                break;
+            default:
+                qemu_plugin_outs("Too many input arguments to plugin!\n");
+                return !0;
+        }
+    }
+
+    // if there were no arguments, or not enough
+    if (!sleepCycles || argc < 4) {
+        return !0;
+    }
+
+    // init the icache simulation
+    icache_init(32768, 4, 32, POLICY_RANDOM);
+    plan.sleepCycles = sleepCycles;
+    plan.cacheRow = cacheRow;
+    plan.cacheSet = cacheSet;
+    plan.cacheBit = cacheBit;
 
     // `info` has information about qemu system state
     // see qemu_info_t in include/qemu/qemu-plugin.h for more details
@@ -155,5 +202,20 @@ static void plugin_exit(qemu_plugin_id_t id, void* p) {
     g_string_append_printf(out, "load count: %ld\n", load_count);
     g_string_append_printf(out, "store count: %ld\n", store_count);
 
+    // print out about the injection
+    g_string_append_printf(out, "slept for %lu cycles\n", plan.sleepCycles);
+    g_string_append_printf(out, "injected at row %lu, set %lu, bit 0x%lX\n",
+                            plan.cacheRow, plan.cacheSet, plan.cacheBit);
+
     qemu_plugin_outs(out->str);
+
+    icache_stats();
 }
+
+/*
+ * Plan:
+ * The plugin will keep track of the addresses in the cache,
+ *  be responsible for changing values in memory (and tag bits in the future)
+ * The fault injector will tell the plugin where to inject fault, and after how long.
+ * Need a function to query the current number of cycles since start.
+ */

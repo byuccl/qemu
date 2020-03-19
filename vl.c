@@ -132,12 +132,6 @@ int main(int argc, char **argv)
 #include "sysemu/iothread.h"
 #include "qemu/guest-random.h"
 
-/************************* Cache simulation includes **************************/
-#include "cache-common.h"
-#include "icache.h"
-#include "dcache.h"
-/******************************************************************************/
-
 #define MAX_VIRTIO_CONSOLES 1
 
 static const char *data_dir[16];
@@ -4420,17 +4414,6 @@ int main(int argc, char **argv, char **envp)
     if (foreach_device_config(DEV_GDB, gdbserver_start) < 0) {
         exit(1);
     }
-
-    //////////////////////// Cache simulation init /////////////////////////
-    // TODO: verify these numbers
-    int load_miss_penalty = 30;
-    int store_miss_penalty = 5;
-    icache_init(ICACHE_SIZE, ICACHE_WAYS, ICACHE_LINE_SIZE, CACHE_POLICY_RANDOM,
-                load_miss_penalty, store_miss_penalty);
-    dcache_init(DCACHE_SIZE, DCACHE_WAYS, DCACHE_LINE_SIZE, CACHE_POLICY_RANDOM,
-                load_miss_penalty, store_miss_penalty); 
-    ////////////////////////////////////////////////////////////////////////
-
 
     qdev_machine_creation_done();
 

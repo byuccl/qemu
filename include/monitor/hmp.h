@@ -154,7 +154,4 @@ void hmp_info_vm_generation_id(Monitor *mon, const QDict *qdict);
 void hmp_info_memory_size_summary(Monitor *mon, const QDict *qdict);
 void hmp_info_sev(Monitor *mon, const QDict *qdict);
 
-// user added, CCL
-void hmp_get_icache_addr(Monitor *mon, const QDict *qdict);
-
 #endif
