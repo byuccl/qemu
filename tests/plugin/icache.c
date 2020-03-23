@@ -41,7 +41,7 @@ int icache_init(uint32_t cacheSize, uint32_t associativity, uint32_t blockSize,
     // malloc the memory (based on icache.c from Google)
     uint32_t byteSize = sizeof(cache_entry_t) * cacheSize;
     // allocate array of pointers, one for each row
-    icache.table = (cache_entry_t**) malloc(sizeof(cache_entry_t) * numRows);
+    icache.table = (cache_entry_t**) malloc(sizeof(cache_entry_t*) * numRows);
     // malloc the memory for whole cache all at once - contiguous, yay!
     cache_entry_t* data = malloc(byteSize);
     // fill with invalid data
@@ -105,14 +105,12 @@ void icache_load(uint64_t vaddr) {
 
     // check all the entries in the row
     int i;
-    cache_result_t result;
+    cache_result_t result = CACHE_RESULT_MISS;
     for (i = 0; i < icache.associativity; i+=1) {
         // TODO: compare tag bits, not addresses
         if ( (cacheRow[i].valid) && (cacheRow[i].addr == addr) ) {
             result = CACHE_RESULT_HIT;
             break;
-        } else {
-            result = CACHE_RESULT_MISS;
         }
     }
 

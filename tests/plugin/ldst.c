@@ -1,5 +1,6 @@
 /*
  * Qemu plugin to track load and store instructions.
+ * Simulates processor caches.
  */
  
 /********************************** includes **********************************/
@@ -20,11 +21,19 @@
 QEMU_PLUGIN_EXPORT int qemu_plugin_version = QEMU_PLUGIN_VERSION;
 
 
+/******************************** definitions *********************************/
+// have available the disassembled string when debugging the callbacks
+// #define DEBUG_INSN_DISAS
+#ifdef DEBUG_INSN_DISAS
+#define LAST_INSN_BUF_SIZE 64
+#endif
+
+
 /**************************** function prototypes *****************************/
 static void parse_instruction(unsigned int vcpu_index, void* userdata);
-// static void parse_ldst(unsigned int vcpu_index, void* userdata);
-static void parse_mem(unsigned int vcpu_index, qemu_plugin_meminfo_t info,
+static void parse_ld(unsigned int vcpu_index, qemu_plugin_meminfo_t info,
                         uint64_t vaddr, void* userdata);
+static void parse_st(unsigned int vcpu_index, void* userdata);
 static void plugin_exit(qemu_plugin_id_t id, void* p);
 static void put_cbs_in_tbs(qemu_plugin_id_t id, struct qemu_plugin_tb* tb);
 
@@ -37,6 +46,10 @@ static const char* ld_prefix_lower = "ld";
 static const char* str_prefix_lower = "st";
 
 static injection_plan_t plan;
+
+#ifdef DEBUG_INSN_DISAS
+static char lastInsnStr[LAST_INSN_BUF_SIZE];
+#endif
 
 
 /********************************* functions **********************************/
@@ -69,43 +82,47 @@ static void put_cbs_in_tbs(qemu_plugin_id_t id, struct qemu_plugin_tb* tb) {
         
         // we can get the disassembly of the instruction?
         char* disas_str = qemu_plugin_insn_disas(insn);
+#ifdef DEBUG_INSN_DISAS
+        strncpy(lastInsnStr, disas_str, LAST_INSN_BUF_SIZE);
+#endif
 
         // I think it will always be lowercase, but not sure
         if (memcmp(disas_str, ld_prefix_lower, 2) == 0) {
             // register a callback with loading
-            qemu_plugin_register_vcpu_mem_cb(insn, parse_mem,
+            qemu_plugin_register_vcpu_mem_cb(insn, parse_ld,
                                         QEMU_PLUGIN_CB_NO_REGS,
                                         QEMU_PLUGIN_MEM_R,
-                                        (void*)true);
+                                        (void*)insn_vaddr);
         } else if (memcmp(disas_str, str_prefix_lower, 2) == 0) {
             // register a callback with storing
-            // these are registering, but the callbacks aren't being called
-            qemu_plugin_register_vcpu_mem_cb(insn, parse_mem,
+            qemu_plugin_register_vcpu_insn_exec_cb(insn, parse_st,
                                         QEMU_PLUGIN_CB_NO_REGS,
-                                        QEMU_PLUGIN_MEM_R,
-                                        (void*)false);
+                                        (void*)insn_vaddr);
+        } else {
+            // register a callback for everything else to track icache uses
+            qemu_plugin_register_vcpu_insn_exec_cb(
+                                        insn, parse_instruction,
+                                        QEMU_PLUGIN_CB_NO_REGS,
+                                        (void*)insn_vaddr);
         }
-
-        // register a callback for each one to track icache uses
-        qemu_plugin_register_vcpu_insn_exec_cb(
-                insn, parse_instruction, QEMU_PLUGIN_CB_NO_REGS, (void*)insn_vaddr);
     }
 }
 
 
 /*
- * Function is called every time an instruction is executed.
+ * Function is called every time a non-memory instruction is executed.
  */
-static void parse_instruction(unsigned int vcpu_index, void* userdata) {
+static void parse_instruction(unsigned int vcpu_index, void* userdata)
+{
     insn_count += 1;
     icache_load((uint64_t)userdata);
 }
 
 
 /*
- * Function is called every time a load or store instruction is executed.
+ * Function is called every time a load instruction is executed.
  */
-static void parse_mem(unsigned int vcpu_index, qemu_plugin_meminfo_t info,
+static void parse_ld(unsigned int vcpu_index, qemu_plugin_meminfo_t info,
                         uint64_t vaddr, void* userdata)
 {
     struct qemu_plugin_hwaddr* hwaddr = qemu_plugin_get_hwaddr(info, vaddr);
@@ -115,12 +132,20 @@ static void parse_mem(unsigned int vcpu_index, qemu_plugin_meminfo_t info,
     // if hwaddr->is_io == false, then use hwaddr->v.ram.hostaddr
     // include/qemu/plugin-memory.h
 
-    bool is_load = (bool)userdata;
-    if (is_load) {
-        load_count += 1;
-    } else {
-        store_count += 1;
-    }
+    load_count += 1;
+    insn_count += 1;
+    icache_load((uint64_t)userdata);
+}
+
+
+/*
+ * Function is called every time a store instruction is executed.
+ */
+static void parse_st(unsigned int vcpu_index, void* userdata)
+{
+    store_count += 1;
+    insn_count += 1;
+    icache_load((uint64_t)userdata);
 }
 
 
@@ -166,6 +191,7 @@ QEMU_PLUGIN_EXPORT int qemu_plugin_install(qemu_plugin_id_t id,
         }
     }
 
+    // TODO: optional - no arguments means only profiling
     // if there were no arguments, or not enough
     if (!sleepCycles || argc < 4) {
         return !0;
@@ -178,7 +204,7 @@ QEMU_PLUGIN_EXPORT int qemu_plugin_install(qemu_plugin_id_t id,
     plan.cacheSet = cacheSet;
     plan.cacheBit = cacheBit;
 
-    // `info` has information about qemu system state
+    // `info` argument has information about qemu system state
     // see qemu_info_t in include/qemu/qemu-plugin.h for more details
 
     // register the functions in this file
