@@ -16,6 +16,7 @@
 
 #include "icache.h"
 #include "injection.h"
+#include "ldst.h"
 
 // required export for it to build properly
 QEMU_PLUGIN_EXPORT int qemu_plugin_version = QEMU_PLUGIN_VERSION;
@@ -27,6 +28,9 @@ QEMU_PLUGIN_EXPORT int qemu_plugin_version = QEMU_PLUGIN_VERSION;
 #ifdef DEBUG_INSN_DISAS
 #define LAST_INSN_BUF_SIZE 64
 #endif
+
+// old method, compare strings for counting
+// #define USE_STRING_COMPARE
 
 
 /**************************** function prototypes *****************************/
@@ -42,8 +46,10 @@ static uint64_t insn_count = 0;
 static uint64_t load_count = 0;
 static uint64_t store_count = 0;
 
+#ifdef USE_STRING_COMPARE
 static const char* ld_prefix_lower = "ld";
 static const char* str_prefix_lower = "st";
+#endif
 
 static injection_plan_t plan;
 
@@ -73,13 +79,7 @@ static void put_cbs_in_tbs(qemu_plugin_id_t id, struct qemu_plugin_tb* tb) {
         //  up in GDB debugging the guest program
         uint64_t insn_vaddr = qemu_plugin_insn_vaddr(insn);
 
-        // data is a pointer to a GByteArray
-        // https://developer.gnome.org/glib/stable/glib-Byte-Arrays.html#GByteArray
-        // const void* insn_data = qemu_plugin_insn_data(insn);
-        // size_t insn_size = qemu_plugin_insn_size(insn);
-        // const guint8* data_array = (guint8*)insn_data;
-        // (void)data_array[insn_size-1];
-        
+#ifdef USE_STRING_COMPARE
         // we can get the disassembly of the instruction?
         char* disas_str = qemu_plugin_insn_disas(insn);
 #ifdef DEBUG_INSN_DISAS
@@ -90,13 +90,13 @@ static void put_cbs_in_tbs(qemu_plugin_id_t id, struct qemu_plugin_tb* tb) {
         if (memcmp(disas_str, ld_prefix_lower, 2) == 0) {
             // register a callback with loading
             qemu_plugin_register_vcpu_mem_cb(insn, parse_ld,
-                                        QEMU_PLUGIN_CB_NO_REGS,
+                                        QEMU_PLUGIN_CB_R_REGS,
                                         QEMU_PLUGIN_MEM_R,
                                         (void*)insn_vaddr);
         } else if (memcmp(disas_str, str_prefix_lower, 2) == 0) {
             // register a callback with storing
             qemu_plugin_register_vcpu_insn_exec_cb(insn, parse_st,
-                                        QEMU_PLUGIN_CB_NO_REGS,
+                                        QEMU_PLUGIN_CB_R_REGS,
                                         (void*)insn_vaddr);
         } else {
             // register a callback for everything else to track icache uses
@@ -105,8 +105,107 @@ static void put_cbs_in_tbs(qemu_plugin_id_t id, struct qemu_plugin_tb* tb) {
                                         QEMU_PLUGIN_CB_NO_REGS,
                                         (void*)insn_vaddr);
         }
+
+#else
+        // data is a pointer to a GByteArray
+        // https://developer.gnome.org/glib/stable/glib-Byte-Arrays.html#GByteArray
+        const void* insn_data = qemu_plugin_insn_data(insn);
+        size_t insn_size = qemu_plugin_insn_size(insn);
+        if (insn_size != 4) {
+            // error, we expected only ARM 32-bit instruction, no aarch64 or thumb
+        }
+
+        const guint8* data_array = (guint8*)insn_data;
+        // do we need to worry about endianness?
+        // yes, do it backwards
+        uint32_t insn_bits = 0;
+        // int i, j;
+        // for (i = insn_size - 1, j = 0; i >= 0; i--, j++) {
+        //     insn_bits |= (data_array[i] << (j * 8));
+        // }
+        int i;
+        for (i = insn_size - 1; i >= 0; i--) {
+            insn_bits |= (data_array[i] << (i * 8));
+        }
+
+
+        // decode the instruction data
+        if (INSN_IS_LOAD_STORE(insn_bits)) {
+            load_store_e type = decode_load_store(NULL, insn_bits);
+            if (type) {
+                if (type < LD_TYPE_BASE) {
+                    // store
+                    qemu_plugin_register_vcpu_insn_exec_cb(insn, parse_st,
+                                        QEMU_PLUGIN_CB_R_REGS,
+                                        (void*)insn_vaddr);
+                } else {
+                    // load
+                    qemu_plugin_register_vcpu_mem_cb(insn, parse_ld,
+                                        QEMU_PLUGIN_CB_R_REGS,
+                                        QEMU_PLUGIN_MEM_R,
+                                        (void*)insn_vaddr);
+                }
+                continue;
+            }
+        }
+
+        // check for extra ld/st
+        int is_extra = INSN_IS_EXTRA_LOAD_STORE(insn_bits);
+        if (is_extra) {
+            extra_load_store_e type = decode_extra_load_store(insn_bits);
+            if (type) {
+                if (type < LD_EXTRA_TYPE_BASE) {
+                    // store
+                    qemu_plugin_register_vcpu_insn_exec_cb(insn, parse_st,
+                                        QEMU_PLUGIN_CB_R_REGS,
+                                        (void*)insn_vaddr);
+                } else {
+                    // load
+                    qemu_plugin_register_vcpu_mem_cb(insn, parse_ld,
+                                        QEMU_PLUGIN_CB_R_REGS,
+                                        QEMU_PLUGIN_MEM_R,
+                                        (void*)insn_vaddr);
+                }
+                continue;
+            }
+        }
+
+        // register a callback for everything else to track icache uses
+        qemu_plugin_register_vcpu_insn_exec_cb(
+                                    insn, parse_instruction,
+                                    QEMU_PLUGIN_CB_NO_REGS,
+                                    (void*)insn_vaddr);
+#endif
     }
 }
+
+
+/*
+ * Expected count, from using strings:
+ * insn count: 115780401
+ * load count:  79321190
+ * store count:  1803052
+ *
+ * insn count: 115780270
+ * load count: 79321185
+ * store count: 1803050
+ */
+
+/*
+ * From using bit compares:
+ * insn count: 115736319
+ * load count: 79249178
+ * store count: 1836089
+ *
+ * TODO:
+ * I think that things like pop, push, and movw 
+ *  are being counted as extra ld/st instructions
+ *
+ * 0x1008e0: 0xe8bd8ff0 - pop
+ * 0x1008e4: 0xe92d4ff0 - push
+ * 0x1008f8: 0xe3002064 - movw    r2, #100
+ * 0x100918: 0xe89a07f0 - ldm     sl, {r4, r5, r6, r7, r8, r9, sl}
+ */
 
 
 /*
