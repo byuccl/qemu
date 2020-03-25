@@ -1,3 +1,6 @@
+#ifndef __ICACHE_H
+#define __ICACHE_H
+
 /*
  * icache.h
  */
@@ -10,3 +13,6 @@ void free_icache(void);
 void icache_cleanup(void);
 void icache_stats(void);
 void icache_load(uint64_t vaddr);
+
+
+#endif  /* __ICACHE_H */

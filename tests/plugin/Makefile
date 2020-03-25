@@ -4,6 +4,7 @@ include $(BUILD_DIR)/config-host.mak
 include $(SRC_PATH)/rules.mak
 
 $(call set-vpath, $(SRC_PATH)/tests/plugin)
+VPATH += $(SRC_PATH)/tests/plugin/cache-sim
 
 NAMES :=
 NAMES += bb
@@ -14,6 +15,7 @@ NAMES += hotblocks
 NAMES += howvec
 NAMES += hotpages
 NAMES += ldst
+LDST_SRCS := icache.o arm-disas.o ldst.o
 
 SONAMES := $(addsuffix .so,$(addprefix lib,$(NAMES)))
 
@@ -22,7 +24,7 @@ QEMU_CFLAGS += -I$(SRC_PATH)/include/qemu
 
 all: $(SONAMES)
 
-libldst.so: ldst.o icache.o
+libldst.so: $(LDST_SRCS)
 	$(CC) -shared -Wl,-soname,$@ -o $@ $^ $(LDLIBS)
 
 lib%.so: %.o

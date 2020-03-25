@@ -16,7 +16,7 @@
 
 #include "icache.h"
 #include "injection.h"
-#include "ldst.h"
+#include "arm-disas.h"
 
 // required export for it to build properly
 QEMU_PLUGIN_EXPORT int qemu_plugin_version = QEMU_PLUGIN_VERSION;
@@ -46,7 +46,7 @@ static uint64_t insn_count = 0;
 static uint64_t load_count = 0;
 static uint64_t store_count = 0;
 
-#ifdef USE_STRING_COMPARE
+#if defined(USE_STRING_COMPARE) || defined(DEBUG_INSN_DISAS)
 static const char* ld_prefix_lower = "ld";
 static const char* str_prefix_lower = "st";
 #endif
@@ -54,7 +54,7 @@ static const char* str_prefix_lower = "st";
 static injection_plan_t plan;
 
 #ifdef DEBUG_INSN_DISAS
-static char lastInsnStr[LAST_INSN_BUF_SIZE];
+char lastInsnStr[LAST_INSN_BUF_SIZE];
 #endif
 
 
@@ -79,13 +79,15 @@ static void put_cbs_in_tbs(qemu_plugin_id_t id, struct qemu_plugin_tb* tb) {
         //  up in GDB debugging the guest program
         uint64_t insn_vaddr = qemu_plugin_insn_vaddr(insn);
 
-#ifdef USE_STRING_COMPARE
-        // we can get the disassembly of the instruction?
+#if defined(USE_STRING_COMPARE) || defined(DEBUG_INSN_DISAS)
+        // we can get the disassembly of the instruction
         char* disas_str = qemu_plugin_insn_disas(insn);
+#endif
 #ifdef DEBUG_INSN_DISAS
         strncpy(lastInsnStr, disas_str, LAST_INSN_BUF_SIZE);
 #endif
 
+#ifdef USE_STRING_COMPARE
         // I think it will always be lowercase, but not sure
         if (memcmp(disas_str, ld_prefix_lower, 2) == 0) {
             // register a callback with loading
@@ -117,23 +119,40 @@ static void put_cbs_in_tbs(qemu_plugin_id_t id, struct qemu_plugin_tb* tb) {
 
         const guint8* data_array = (guint8*)insn_data;
         // do we need to worry about endianness?
-        // yes, do it backwards
+        // no, the encoding matches the ARM reference
+        // however, this won't work if it's a T-32 instruction
+        //  have to get the last 2 bytes first, then the first 2
         uint32_t insn_bits = 0;
-        // int i, j;
-        // for (i = insn_size - 1, j = 0; i >= 0; i--, j++) {
-        //     insn_bits |= (data_array[i] << (j * 8));
-        // }
         int i;
         for (i = insn_size - 1; i >= 0; i--) {
             insn_bits |= (data_array[i] << (i * 8));
         }
-
 
         // decode the instruction data
         if (INSN_IS_LOAD_STORE(insn_bits)) {
             load_store_e type = decode_load_store(NULL, insn_bits);
             if (type) {
                 if (type < LD_TYPE_BASE) {
+                    // store
+                    qemu_plugin_register_vcpu_insn_exec_cb(insn, parse_st,
+                                        QEMU_PLUGIN_CB_R_REGS,
+                                        (void*)insn_vaddr);
+                } else {
+                    // load
+                    qemu_plugin_register_vcpu_mem_cb(insn, parse_ld,
+                                        QEMU_PLUGIN_CB_R_REGS,
+                                        QEMU_PLUGIN_MEM_R,
+                                        (void*)insn_vaddr);
+                }
+                continue;
+            }
+        }
+
+        // check for block ld/st
+        if (INSN_IS_BLOCK_LOAD_STORE(insn_bits)) {
+            block_load_store_e type = decode_block_load_store(insn_bits);
+            if (type) {
+                if (type < LD_BLK_TYPE_BASE) {
                     // store
                     qemu_plugin_register_vcpu_insn_exec_cb(insn, parse_st,
                                         QEMU_PLUGIN_CB_R_REGS,
@@ -170,6 +189,8 @@ static void put_cbs_in_tbs(qemu_plugin_id_t id, struct qemu_plugin_tb* tb) {
             }
         }
 
+        // check for block moving
+
         // register a callback for everything else to track icache uses
         qemu_plugin_register_vcpu_insn_exec_cb(
                                     insn, parse_instruction,
@@ -187,24 +208,30 @@ static void put_cbs_in_tbs(qemu_plugin_id_t id, struct qemu_plugin_tb* tb) {
  * store count:  1803052
  *
  * insn count: 115780270
- * load count: 79321185
- * store count: 1803050
+ * load count:  79321185
+ * store count:  1803050
  */
 
 /*
  * From using bit compares:
- * insn count: 115736319
- * load count: 79249178
- * store count: 1836089
+ * 
+ * insn count: 115390295
+ * load count:  78841108
+ * store count:  1803042
+ * 
+ * insn count: 115390283
+ * load count:  78841153
+ * store count:  1803058
  *
  * TODO:
- * I think that things like pop, push, and movw 
- *  are being counted as extra ld/st instructions
+ * I think that things like load and store multiple (block move)
+ *  are not being counted
  *
- * 0x1008e0: 0xe8bd8ff0 - pop
- * 0x1008e4: 0xe92d4ff0 - push
- * 0x1008f8: 0xe3002064 - movw    r2, #100
- * 0x100918: 0xe89a07f0 - ldm     sl, {r4, r5, r6, r7, r8, r9, sl}
+ * A5.5 - Table A5-21 - page 214
+ * 0x105ae4: 0x2300e9d1 - ldrd r2, r3, [r1]
+ *  actually e9d1 2300, because it's in 32-bit Thumb mode for strlen()
+ * 1110 1001 1101 0001 0010 0011 0000 0000
+ * see A6.3.6, also A6.3, table A6-9 on page 230
  */
 
 
@@ -263,10 +290,17 @@ QEMU_PLUGIN_EXPORT int qemu_plugin_install(qemu_plugin_id_t id,
                                             int argc, char** argv)
 {
     // parse arguments to the plugin
-    // pretty sure argv[0] is NOT the name of the program, like normal
+    // argv[0] is NOT the name of the program, like normal
     uint64_t sleepCycles = 0;
     // have to be 64 bit so can use stroul
     uint64_t cacheRow, cacheSet, cacheBit;
+
+    // allow all args or none
+    uint32_t numArgs = 4;
+    if (argc > 0 && argc != numArgs) {
+        qemu_plugin_outs("Wrong number of arguments to plugin!\n");
+        return !0;
+    }
 
     // based on example in howvec.c
     for (int i = 0; i < argc; i++) {
@@ -290,18 +324,17 @@ QEMU_PLUGIN_EXPORT int qemu_plugin_install(qemu_plugin_id_t id,
         }
     }
 
-    // TODO: optional - no arguments means only profiling
-    // if there were no arguments, or not enough
-    if (!sleepCycles || argc < 4) {
-        return !0;
+    // optional - no arguments means only profiling
+    if (sleepCycles) {
+        // init the icache simulation
+        icache_init(32768, 4, 32, POLICY_RANDOM);
+        plan.sleepCycles = sleepCycles;
+        plan.cacheRow = cacheRow;
+        plan.cacheSet = cacheSet;
+        plan.cacheBit = cacheBit;        
+    } else {
+        // only profiling - NYI
     }
-
-    // init the icache simulation
-    icache_init(32768, 4, 32, POLICY_RANDOM);
-    plan.sleepCycles = sleepCycles;
-    plan.cacheRow = cacheRow;
-    plan.cacheSet = cacheSet;
-    plan.cacheBit = cacheBit;
 
     // `info` argument has information about qemu system state
     // see qemu_info_t in include/qemu/qemu-plugin.h for more details
