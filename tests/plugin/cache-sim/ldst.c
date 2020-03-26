@@ -32,6 +32,17 @@ QEMU_PLUGIN_EXPORT int qemu_plugin_version = QEMU_PLUGIN_VERSION;
 // old method, compare strings for counting
 // #define USE_STRING_COMPARE
 
+// useful macros for registering a specific type of callback
+#define SET_LOAD_CB(insn, userp) \
+                    qemu_plugin_register_vcpu_mem_cb(insn, parse_ld,    \
+                                    QEMU_PLUGIN_CB_R_REGS,              \
+                                    QEMU_PLUGIN_MEM_R,                  \
+                                    (void*)userp)
+#define SET_STORE_CB(insn, userp) \
+                    qemu_plugin_register_vcpu_insn_exec_cb(insn, parse_st,  \
+                                    QEMU_PLUGIN_CB_R_REGS,                  \
+                                    (void*)userp)
+
 
 /**************************** function prototypes *****************************/
 static void parse_instruction(unsigned int vcpu_index, void* userdata);
@@ -134,15 +145,10 @@ static void put_cbs_in_tbs(qemu_plugin_id_t id, struct qemu_plugin_tb* tb) {
             if (type) {
                 if (type < LD_TYPE_BASE) {
                     // store
-                    qemu_plugin_register_vcpu_insn_exec_cb(insn, parse_st,
-                                        QEMU_PLUGIN_CB_R_REGS,
-                                        (void*)insn_vaddr);
+                    SET_STORE_CB(insn, insn_vaddr);
                 } else {
                     // load
-                    qemu_plugin_register_vcpu_mem_cb(insn, parse_ld,
-                                        QEMU_PLUGIN_CB_R_REGS,
-                                        QEMU_PLUGIN_MEM_R,
-                                        (void*)insn_vaddr);
+                    SET_LOAD_CB(insn, insn_vaddr);
                 }
                 continue;
             }
@@ -154,15 +160,10 @@ static void put_cbs_in_tbs(qemu_plugin_id_t id, struct qemu_plugin_tb* tb) {
             if (type) {
                 if (type < LD_BLK_TYPE_BASE) {
                     // store
-                    qemu_plugin_register_vcpu_insn_exec_cb(insn, parse_st,
-                                        QEMU_PLUGIN_CB_R_REGS,
-                                        (void*)insn_vaddr);
+                    SET_STORE_CB(insn, insn_vaddr);
                 } else {
                     // load
-                    qemu_plugin_register_vcpu_mem_cb(insn, parse_ld,
-                                        QEMU_PLUGIN_CB_R_REGS,
-                                        QEMU_PLUGIN_MEM_R,
-                                        (void*)insn_vaddr);
+                    SET_LOAD_CB(insn, insn_vaddr);
                 }
                 continue;
             }
@@ -170,26 +171,57 @@ static void put_cbs_in_tbs(qemu_plugin_id_t id, struct qemu_plugin_tb* tb) {
 
         // check for extra ld/st
         int is_extra = INSN_IS_EXTRA_LOAD_STORE(insn_bits);
-        if (is_extra) {
+        // and also synchronization primitives
+        if (is_extra == MISC_IS_SYNC_PRIMITIVE) {
+            sync_load_store_e type = decode_sync_load_store(insn_bits);
+            if (type >= SWAP_WORD) {
+                // it's both!
+                SET_STORE_CB(insn, insn_vaddr);
+                SET_LOAD_CB(insn, insn_vaddr);
+            } else if (type < LD_SYNC_TYPE_BASE) {
+                // store
+                SET_STORE_CB(insn, insn_vaddr);
+            } else {
+                // load
+                SET_LOAD_CB(insn, insn_vaddr);
+            }
+        }
+        else if (is_extra) {
             extra_load_store_e type = decode_extra_load_store(insn_bits);
             if (type) {
                 if (type < LD_EXTRA_TYPE_BASE) {
                     // store
-                    qemu_plugin_register_vcpu_insn_exec_cb(insn, parse_st,
-                                        QEMU_PLUGIN_CB_R_REGS,
-                                        (void*)insn_vaddr);
+                    SET_STORE_CB(insn, insn_vaddr);
                 } else {
                     // load
-                    qemu_plugin_register_vcpu_mem_cb(insn, parse_ld,
-                                        QEMU_PLUGIN_CB_R_REGS,
-                                        QEMU_PLUGIN_MEM_R,
-                                        (void*)insn_vaddr);
+                    SET_LOAD_CB(insn, insn_vaddr);
                 }
                 continue;
             }
         }
 
-        // check for block moving
+        // check for coprocessor ld/st
+        cp_load_store_e coproc_ldst = INSN_IS_COPROC_LOAD_STORE(insn_bits);
+        if (coproc_ldst) {
+            if (coproc_ldst < LD_CP_TYPE_BASE) {
+                // store
+                SET_STORE_CB(insn, insn_vaddr);
+            } else {
+                // load
+                SET_LOAD_CB(insn, insn_vaddr);
+            }
+        }
+
+#ifdef DEBUG_INSN_DISAS
+        // check for any stragglers
+        if ((memcmp(disas_str, ld_prefix_lower, 2) == 0) ||
+            (memcmp(disas_str, str_prefix_lower, 2) == 0))
+        {
+            g_autofree gchar *out;
+            out = g_strdup_printf("insn: %s\n", disas_str);
+            qemu_plugin_outs(out);
+        }
+#endif
 
         // register a callback for everything else to track icache uses
         qemu_plugin_register_vcpu_insn_exec_cb(
@@ -203,35 +235,24 @@ static void put_cbs_in_tbs(qemu_plugin_id_t id, struct qemu_plugin_tb* tb) {
 
 /*
  * Expected count, from using strings:
- * insn count: 115780401
- * load count:  79321190
- * store count:  1803052
- *
- * insn count: 115780270
- * load count:  79321185
- * store count:  1803050
+ * Can't use this as a base line, because things like pop/push
+ *  also access memory, and they don't have the same prefix.
  */
 
 /*
  * From using bit compares:
  * 
- * insn count: 115390295
- * load count:  78841108
- * store count:  1803042
- * 
- * insn count: 115390283
+ * insn count: 115390281
  * load count:  78841153
- * store count:  1803058
- *
- * TODO:
- * I think that things like load and store multiple (block move)
- *  are not being counted
+ * store count:  2862292
  *
  * A5.5 - Table A5-21 - page 214
  * 0x105ae4: 0x2300e9d1 - ldrd r2, r3, [r1]
  *  actually e9d1 2300, because it's in 32-bit Thumb mode for strlen()
  * 1110 1001 1101 0001 0010 0011 0000 0000
  * see A6.3.6, also A6.3, table A6-9 on page 230
+ * So how do we determine if an instruction is in Thumb mode, especially
+ *  when it still is a 32-bit instruction?
  */
 
 

@@ -51,6 +51,7 @@ load_store_e decode_load_store(insn_op_t* insn_data, uint32_t insn_bits);
 
 
 /************************* determine extra load/store *************************/
+#define MISC_IS_SYNC_PRIMITIVE      (3)     /* A5-205 */
 int INSN_IS_EXTRA_LOAD_STORE(uint32_t insn);
 
 
@@ -102,8 +103,6 @@ typedef enum block_load_store {
     STRM_INC_BEF,
     STRM_USR_REG,
     PUSH_MULT,
-    BRANCH,         // TODO: do these store things?
-    BRANCH_LINK,
     // load instructions
     LDM_DEC_AFT = LD_TYPE_BASE,
     LDM_DEC_BEF,
@@ -115,6 +114,46 @@ typedef enum block_load_store {
 } block_load_store_e;
 
 block_load_store_e decode_block_load_store(uint32_t insn_bits);
+
+
+/***************************** coprocessor ld/st ******************************/
+#define STR_CP_TYPE_BASE 0x3001
+#define LD_CP_TYPE_BASE  0X3100
+
+typedef enum cp_load_store {
+    NOT_CP_LOAD_STORE = 0,
+    CP_STR = STR_CP_TYPE_BASE,
+    CP_LD_IMM = LD_CP_TYPE_BASE,
+    CP_LD_LIT,
+} cp_load_store_e;
+
+cp_load_store_e INSN_IS_COPROC_LOAD_STORE(uint32_t insn);
+
+
+/************************* synchronization primitives *************************/
+#define STR_SYNC_TYPE_BASE 0x4001
+#define LD_SYNC_TYPE_BASE  0x4100
+#define SWP_SYNC_TYPE_BASE 0x4200
+
+typedef enum sync_load_store {
+    NOT_SYNC_LOAD_STORE = 0,
+    STR_EXCL = STR_SYNC_TYPE_BASE,
+    STR_EXCL_DW,
+    STR_EXCL_BYTE,
+    STR_EXCL_HALF,
+    LD_EXCL = LD_SYNC_TYPE_BASE,
+    LD_EXCL_DW,
+    LD_EXCL_BYTE,
+    LD_EXCL_HALF,
+    SWAP_WORD = SWP_SYNC_TYPE_BASE,
+    SWAP_BYTE,
+} sync_load_store_e;
+
+sync_load_store_e decode_sync_load_store(uint32_t insn);
+
+
+/******************************** vector ld/st ********************************/
+// TODO
 
 
 #endif  /* __ARM_DISAS_H */

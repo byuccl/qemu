@@ -242,8 +242,7 @@ static const uint32_t MISC_OP2_BITS_MASK = CREATE_BIT_MASK(4) << 4;
 
 #define MISC_IS_EXTRA_LDST          (1)     /* A5-203 */
 #define MISC_IS_EXTRA_LDST_UNPRIV   (2)     /* A5-204 */
-// #define MISC_IS_16_BIT_LOAD         (3)     /* A8-484 */
-// #define MISC_IS_16_BIT_LOAD_HIGH    (4)     /* A8-491 */
+// #define MISC_IS_SYNC_PRIMITIVE      (3)     /* A5-205 */
 
 /*
  * See table A5-2
@@ -266,6 +265,10 @@ int INSN_IS_EXTRA_LOAD_STORE(uint32_t insn) {
         uint8_t op1_mask_1 = op1_bits & 0x12;
         uint8_t op2_mask_1 = op2_bits & 0xD;
         uint8_t op1_mask_2 = op1_bits & 0x13;
+        // we're also going to piggyback this function to look for
+        //  synchronization primitives
+        uint8_t op1_mask_3 = op1_bits & 0x10;
+
         // matches the first 2 instances of A5-203 in table A5-2
         if ( (op1_mask_1 != 0x02) &&
             ( (op2_bits == 0xB) || (op2_mask_1 == 0xD) ))
@@ -287,20 +290,12 @@ int INSN_IS_EXTRA_LOAD_STORE(uint32_t insn) {
         {
             returnVal = MISC_IS_EXTRA_LDST_UNPRIV;
         }
+        else if ( (op1_mask_3 == 0x10) &&
+                    (op2_bits == 0x9))
+        {
+            returnVal = MISC_IS_SYNC_PRIMITIVE;
+        }
     }
-    // these are immediate mov instructions, that is,
-    //  the value is encoded in the instruction,
-    //  so no data memory is accessed with these instructions
-    // else {
-    //     if (op1_bits == 0x10)
-    //     {
-    //         returnVal = MISC_IS_16_BIT_LOAD;
-    //     }
-    //     else if (op1_bits == 0x14)
-    //     {
-    //         returnVal = MISC_IS_16_BIT_LOAD_HIGH;
-    //     }
-    // }
 
     return returnVal;
 }
@@ -501,11 +496,110 @@ block_load_store_e decode_block_load_store(uint32_t insn_bits) {
                 returnVal = LDM_USR_REG;    /* B9-1988 */
             }
         }
-        // branches go here?
     }
 
     return returnVal;
 }
 
 
-// TODO: Synchronization primitives (A5.2.10, page 205) have exclusive loads and stores. do we need to treat these the same? As in, do they use cache?
+/***************************** coprocessor ld/st ******************************/
+static const uint32_t COPROC_BITS_MASK = CREATE_BIT_MASK(4) << 8;
+
+// reuse a bitmask
+#define GET_COPROC_OP1_BITS(bits) ((bits & LDSTM_OP_BITS_MASK) >> 20)
+#define GET_COPROC_RN_BITS(bits)  ((bits & LDSTM_RN_BITS_MASK) >> 16)
+#define GET_COPROC_CP_BITS(bits)  ((bits & COPROC_BITS_MASK) >> 8)
+
+/*
+ * Table A5-22 on page A5-215
+ * TODO: this has not yet been tested
+ */
+cp_load_store_e INSN_IS_COPROC_LOAD_STORE(uint32_t insn) {
+    // don't care about bit 0
+    uint8_t arm_op1 = GET_INSN_OP1_BITS(insn) & 0x6;
+    cp_load_store_e returnVal = NOT_CP_LOAD_STORE;
+
+    if (arm_op1 == 0x6) {
+        // mask out bit 2
+        uint8_t op1_bits = GET_COPROC_OP1_BITS(insn) & 0x3B;
+        // mask out bit 0
+        uint8_t cp_bits = GET_COPROC_CP_BITS(insn) & 0xE;
+
+        if (cp_bits != 0xA) {
+            // store is 0xxxx0 not 000x00
+            //  load is 0xxxx1 not 000x01
+            if (op1_bits) {
+                // is it potentially a load?
+                if (op1_bits & 0x1) {
+                    if (op1_bits > 1) {
+                        uint8_t Rn = GET_COPROC_RN_BITS(insn);
+                        if (Rn == 0xF) {
+                            returnVal = CP_LD_LIT;      /* A8-394 */
+                        } else {
+                            returnVal = CP_LD_IMM;      /* A8-392 */
+                        }
+                    }
+                } else {
+                    returnVal = CP_STR;                 /* A8-662 */
+                }
+            }
+        }
+    }
+
+    return returnVal;
+}
+
+
+/************************* synchronization primitives *************************/
+static const uint32_t SYNC_OP_BITS_MASK = CREATE_BIT_MASK(4) << 20;
+
+#define GET_SYNC_OP_BITS(insn) ((insn & SYNC_OP_BITS_MASK) >> 20)
+
+/*
+ *
+ */
+sync_load_store_e decode_sync_load_store(uint32_t insn) {
+    uint8_t op_bits = GET_SYNC_OP_BITS(insn);
+    sync_load_store_e returnVal = NOT_SYNC_LOAD_STORE;
+
+    switch (op_bits) {
+    case 0x0:
+        returnVal = SWAP_WORD;          /* A8-722 */
+        break;
+    case 0x4:
+        returnVal = SWAP_BYTE;          /* A8-722 */
+        break;
+    case 0x8:
+        returnVal = STR_EXCL;           /* A8-690 */
+        break;
+    case 0x9:
+        returnVal = LD_EXCL;            /* A8-432 */
+        break;
+    case 0xA:
+        returnVal = STR_EXCL_DW;        /* A8-694 */
+        break;
+    case 0xB:
+        returnVal = LD_EXCL_DW;         /* A8-436 */
+        break;
+    case 0xC:
+        returnVal = STR_EXCL_BYTE;      /* A8-692 */
+        break;
+    case 0xD:
+        returnVal = LD_EXCL_BYTE;       /* A8-434 */
+        break;
+    case 0xE:
+        returnVal = STR_EXCL_HALF;      /* A8-696 */
+        break;
+    case 0xF:
+        returnVal = LD_EXCL_HALF;       /* A8-438 */
+        break;
+    default:
+        break;
+    }
+
+    return returnVal;
+}
+
+
+/******************************** vector ld/st ********************************/
+// TODO
