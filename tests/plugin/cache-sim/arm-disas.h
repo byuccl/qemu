@@ -6,6 +6,8 @@
 
 /*
  * Header file for disassembling ARM instructions.
+ * TODO: for determing which type things are, we can mask out the bottom byte,
+ *  and use the upper half for range matching (switch)
  */
 
 
@@ -14,17 +16,6 @@ int INSN_IS_LOAD_STORE(uint32_t insn);
 
 
 /***************************** regular load/store *****************************/
-struct insn_op {
-    uint32_t dataAddr;
-    struct bit_field_s {
-        uint8_t op1;
-        uint8_t Rn;
-        uint8_t A;
-        uint8_t B;
-    } bitfield;
-};
-typedef struct insn_op insn_op_t;
-
 #define LD_TYPE_BASE 0x100
 #define STR_TYPE_BASE 0x001
 typedef enum regular_load_store {
@@ -46,8 +37,6 @@ typedef enum regular_load_store {
     LD_REG_BYTE,
     LD_REG_BYTE_UNPRIV,
 } load_store_e;
-
-load_store_e decode_load_store(insn_op_t* insn_data, uint32_t insn_bits);
 
 
 /************************* determine extra load/store *************************/
@@ -84,8 +73,6 @@ typedef enum extra_load_store {
     LD_HALF_SIGNED_UNPRIV,
 } extra_load_store_e;
 
-extra_load_store_e decode_extra_load_store(uint32_t insn_bits);
-
 
 /*************************** check block load/store ***************************/
 int INSN_IS_BLOCK_LOAD_STORE(uint32_t insn);
@@ -113,8 +100,6 @@ typedef enum block_load_store {
     POP_MULT,
 } block_load_store_e;
 
-block_load_store_e decode_block_load_store(uint32_t insn_bits);
-
 
 /***************************** coprocessor ld/st ******************************/
 #define STR_CP_TYPE_BASE 0x3001
@@ -126,8 +111,6 @@ typedef enum cp_load_store {
     CP_LD_IMM = LD_CP_TYPE_BASE,
     CP_LD_LIT,
 } cp_load_store_e;
-
-cp_load_store_e INSN_IS_COPROC_LOAD_STORE(uint32_t insn);
 
 
 /************************* synchronization primitives *************************/
@@ -149,11 +132,49 @@ typedef enum sync_load_store {
     SWAP_BYTE,
 } sync_load_store_e;
 
-sync_load_store_e decode_sync_load_store(uint32_t insn);
-
 
 /******************************** vector ld/st ********************************/
 // TODO
+
+
+/*************************** instruction parameters ***************************/
+struct insn_op {
+    uint32_t dataAddr;
+    struct bit_field_s {
+        uint8_t cond;
+        uint8_t Rn;
+        uint8_t Rt;
+        uint8_t Rm;
+        uint8_t type;
+        uint8_t add;
+        uint8_t index;
+        uint8_t wback;
+    } bitfield;
+    // you can only have one immediate field in any instruction
+    union imm_u {
+        uint16_t imm12;
+        uint8_t imm5;
+        uint8_t imm8;
+    } imm;
+    // what is the kind of instruction
+    union type_u {
+        load_store_e load_store;
+        extra_load_store_e extra_load_store;
+        block_load_store_e block_load_store;
+        cp_load_store_e cp_load_store;
+        sync_load_store_e sync_load_store;
+    } type;
+};
+typedef struct insn_op insn_op_t;
+
+
+/**************************** function prototypes *****************************/
+
+load_store_e decode_load_store(insn_op_t* insn_data, uint32_t insn_bits);
+extra_load_store_e decode_extra_load_store(uint32_t insn_bits);
+block_load_store_e decode_block_load_store(uint32_t insn_bits);
+cp_load_store_e INSN_IS_COPROC_LOAD_STORE(uint32_t insn);
+sync_load_store_e decode_sync_load_store(uint32_t insn);
 
 
 #endif  /* __ARM_DISAS_H */

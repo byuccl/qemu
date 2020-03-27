@@ -29,9 +29,6 @@ QEMU_PLUGIN_EXPORT int qemu_plugin_version = QEMU_PLUGIN_VERSION;
 #define LAST_INSN_BUF_SIZE 64
 #endif
 
-// old method, compare strings for counting
-// #define USE_STRING_COMPARE
-
 // useful macros for registering a specific type of callback
 #define SET_LOAD_CB(insn, userp) \
                     qemu_plugin_register_vcpu_mem_cb(insn, parse_ld,    \
@@ -90,36 +87,12 @@ static void put_cbs_in_tbs(qemu_plugin_id_t id, struct qemu_plugin_tb* tb) {
         //  up in GDB debugging the guest program
         uint64_t insn_vaddr = qemu_plugin_insn_vaddr(insn);
 
-#if defined(USE_STRING_COMPARE) || defined(DEBUG_INSN_DISAS)
-        // we can get the disassembly of the instruction
-        char* disas_str = qemu_plugin_insn_disas(insn);
-#endif
 #ifdef DEBUG_INSN_DISAS
+        // get the disassembly of the instruction
+        char* disas_str = qemu_plugin_insn_disas(insn);
         strncpy(lastInsnStr, disas_str, LAST_INSN_BUF_SIZE);
 #endif
 
-#ifdef USE_STRING_COMPARE
-        // I think it will always be lowercase, but not sure
-        if (memcmp(disas_str, ld_prefix_lower, 2) == 0) {
-            // register a callback with loading
-            qemu_plugin_register_vcpu_mem_cb(insn, parse_ld,
-                                        QEMU_PLUGIN_CB_R_REGS,
-                                        QEMU_PLUGIN_MEM_R,
-                                        (void*)insn_vaddr);
-        } else if (memcmp(disas_str, str_prefix_lower, 2) == 0) {
-            // register a callback with storing
-            qemu_plugin_register_vcpu_insn_exec_cb(insn, parse_st,
-                                        QEMU_PLUGIN_CB_R_REGS,
-                                        (void*)insn_vaddr);
-        } else {
-            // register a callback for everything else to track icache uses
-            qemu_plugin_register_vcpu_insn_exec_cb(
-                                        insn, parse_instruction,
-                                        QEMU_PLUGIN_CB_NO_REGS,
-                                        (void*)insn_vaddr);
-        }
-
-#else
         // data is a pointer to a GByteArray
         // https://developer.gnome.org/glib/stable/glib-Byte-Arrays.html#GByteArray
         const void* insn_data = qemu_plugin_insn_data(insn);
@@ -139,9 +112,17 @@ static void put_cbs_in_tbs(qemu_plugin_id_t id, struct qemu_plugin_tb* tb) {
             insn_bits |= (data_array[i] << (i * 8));
         }
 
+        // we're going to gather information about the instruction
+        // TODO: this will need to go in some kind of table, and pass the
+        //  base address in to the callbacks
+        // TODO: would this be able to go in some kind of table where the
+        //  encoded bits are the key? then we would only have to translate
+        //  each instruction encoding once
+        insn_op_t insn_op_data;
+
         // decode the instruction data
         if (INSN_IS_LOAD_STORE(insn_bits)) {
-            load_store_e type = decode_load_store(NULL, insn_bits);
+            load_store_e type = decode_load_store(&insn_op_data, insn_bits);
             if (type) {
                 if (type < LD_TYPE_BASE) {
                     // store
@@ -185,6 +166,7 @@ static void put_cbs_in_tbs(qemu_plugin_id_t id, struct qemu_plugin_tb* tb) {
                 // load
                 SET_LOAD_CB(insn, insn_vaddr);
             }
+            continue;
         }
         else if (is_extra) {
             extra_load_store_e type = decode_extra_load_store(insn_bits);
@@ -228,7 +210,6 @@ static void put_cbs_in_tbs(qemu_plugin_id_t id, struct qemu_plugin_tb* tb) {
                                     insn, parse_instruction,
                                     QEMU_PLUGIN_CB_NO_REGS,
                                     (void*)insn_vaddr);
-#endif
     }
 }
 

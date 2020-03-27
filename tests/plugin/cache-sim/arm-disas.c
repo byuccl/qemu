@@ -10,12 +10,6 @@
 
 /*********************************** notes ************************************/
 /*
- * TODO: look at floating point instructions. Are there any that are load/store?
- * TODO: how to handle conditional loads/stores?
- * See howvec.c for a list of available opcodes for aarch64
- */
-
-/*
  * Types of ARM 32 instructions:
  * Branch and control
  * Data processing
@@ -32,6 +26,8 @@
 /*
  * Condition code field (bits 31-28):
  * if == 0b1111, instruciton must be executed unconditionally (A5-216)
+ * TODO: look at these
+ * TODO: how to handle conditional loads/stores?
  */
 
 /*
@@ -47,24 +43,6 @@
  *      | 1  | media instructions (A5-209)
  *  10x | -  | Branch, branch w/ link, block data transfer (A5-214)
  *  11x | -  | Coprocessor instructions, supervisor call (A5-215, A7)
- */
-
-/*
- * Data processing & misc (A5-196):
- * | 31-28 | 27-26 | 25 | 24-20 | 19-8 | 7-4 | 3-0 |
- * |  cond |  0 0  | op |  op1  | ?    | op2 |  ?  |
- * 
- * I'm only including the ones that do load/store operations
- * 
- * | op |  op1   | op2  | Instruction class |
- * ------------------------------------------
- * | 0  | ~0xx1x | 1011 | Extra load/store instructions (A5-203)
- * |    |        | 11x1 |  ""
- * |    |  0xx10 | 11x1 |  ""
- * |    |  0xx1x | 1011 | Extra load/store, unprivileged (A5-204)
- * |    |  0xx11 | 11x1 |  ""
- * | 1  |  10000 |  -   | 16-bit immediate load (A8-484)
- * |    |  10100 |  -   | high halfword 16-bit immediate load (A8-491)
  */
 
 
@@ -95,7 +73,6 @@ static const uint32_t ARM_OP_BIT_MASK   = CREATE_BIT_MASK(1) << 4;
 #define GET_INSN_OP_BIT(insn)   ((insn & ARM_OP_BIT_MASK) >> 4)
 
 // ARM ARM Table A5-1
-// TODO: extra instructions also have some
 int INSN_IS_LOAD_STORE(uint32_t insn) {
     uint8_t op1_bits = GET_INSN_OP1_BITS(insn);
     uint8_t op_bit   = GET_INSN_OP_BIT(insn);
@@ -112,11 +89,29 @@ static const uint32_t LDST_A_BIT_MASK    = CREATE_BIT_MASK(1) << 25;
 static const uint32_t LDST_B_BIT_MASK    = CREATE_BIT_MASK(1) << 4;
 static const uint8_t  LDST_UNPRIV_MASK   = 0x12;    // bits 1 and 4 of 5 total
 static const uint8_t  LDST_UNPRIV_BITS   = 0x02;    // only bit 1 is set
+static const uint32_t LDST_RT_BITS_MASK  = CREATE_BIT_MASK(4) << 12;
+static const uint16_t LDST_IMM12_MASK    = CREATE_BIT_MASK(12);
+static const uint16_t LDST_IMM5_MASK     = CREATE_BIT_MASK(5) << 7;
+static const uint8_t  LDST_RM_BITS_MASK  = CREATE_BIT_MASK(4);
+static const uint8_t  LDST_TYPE_MASK     = CREATE_BIT_MASK(2) << 5;
 
 #define GET_LDST_OP1_BITS(bits) ((bits & LDST_OP1_BITS_MASK) >> 20)
 #define GET_LDST_RN_BITS(bits)  ((bits & LDST_RN_BITS_MASK) >> 16)
 #define GET_LDST_A_BIT(bits)    ((bits & LDST_A_BIT_MASK) >> 25)
 #define GET_LDST_B_BIT(bits)    ((bits & LDST_B_BIT_MASK) >> 4)
+#define GET_LDST_RT_BITS(bits)  ((bits & LDST_RT_BITS_MASK) >> 12)
+#define GET_LDST_IMM12(bits)    ((bits & LDST_IMM12_MASK))
+#define GET_LDST_IMM5(bits)     ((bits & LDST_IMM12_MASK) >> 7)
+#define GET_LDST_RM_BITS(bits)  ((bits & LDST_RM_BITS_MASK))
+#define GET_LDST_TYPE(bits)     ((bits & LDST_TYPE_MASK) >> 5)
+
+typedef enum ldst_enc {
+    LDST_INVALID = 0,
+    LDST_UNPRIV,
+    LDST_IMM,
+    LDST_LIT,
+    LDST_REG,
+} ldst_enc_e;
 
 
 /*
@@ -131,6 +126,7 @@ load_store_e decode_load_store(insn_op_t* insn_data, uint32_t insn_bits) {
     uint8_t A   = GET_LDST_A_BIT(insn_bits);
     // uint8_t B   = GET_LDST_B_BIT(insn_bits);
     load_store_e returnVal = NOT_LOAD_STORE;
+    ldst_enc_e encodeType = LDST_INVALID;
 
     // store instructions have in common that the lowest bit of op1 is 0
     // load instructions have in common that the lowest bit of op1 is 1
@@ -143,13 +139,16 @@ load_store_e decode_load_store(insn_op_t* insn_data, uint32_t insn_bits) {
             if ((op1 & LDST_UNPRIV_MASK) == LDST_UNPRIV_BITS) {
                 // unprivileged store word (A8-706)
                 returnVal = STR_REG_UNPRIV;
+                encodeType = LDST_UNPRIV;
             } else {
                 if (A) {
                     // store register word (A8-676)
                     returnVal = STR_REG;
+                    encodeType = LDST_REG;
                 } else {
                     // store immediate word (A8-674)
                     returnVal = STR_REG_IMM;
+                    encodeType = LDST_IMM;
                 }
             }
             break;
@@ -158,13 +157,16 @@ load_store_e decode_load_store(insn_op_t* insn_data, uint32_t insn_bits) {
             if ((op1 & LDST_UNPRIV_MASK) == LDST_UNPRIV_BITS) {
                 // unprivileged store byte (A8-684)
                 returnVal = STR_REG_BYTE_UNPRIV;
+                encodeType = LDST_UNPRIV;
             } else {
                 if (A) {
                     // store register byte (A8-682)
                     returnVal = STR_REG_BYTE;
+                    encodeType = LDST_REG;
                 } else {
                     // store immediate byte (A8-680)
                     returnVal = STR_REG_IMM_BYTE;
+                    encodeType = LDST_IMM;
                 }
             }
             break;
@@ -177,17 +179,21 @@ load_store_e decode_load_store(insn_op_t* insn_data, uint32_t insn_bits) {
             if ((op1 & LDST_UNPRIV_MASK) == LDST_UNPRIV_BITS) {
                 // unprivileged load register (A8-466)
                 returnVal = LD_REG_UNPRIV;
+                encodeType = LDST_UNPRIV;
             } else {
                 if (A) {
                     // load register word (A8-414)
                     returnVal = LD_REG;
+                    encodeType = LDST_REG;
                 } else {
                     if (Rn == 0xF) {
                         // load register literal (A8-410)
                         returnVal = LD_REG_LIT;
+                        encodeType = LDST_LIT;
                     } else {
                         // load register immediate (A8-408)
                         returnVal = LD_REG_IMM;
+                        encodeType = LDST_IMM;
                     }
                 }
             }
@@ -196,17 +202,21 @@ load_store_e decode_load_store(insn_op_t* insn_data, uint32_t insn_bits) {
             if ((op1 & LDST_UNPRIV_MASK) == LDST_UNPRIV_BITS) {
                 // unprivileged load register byte (A8-424)
                 returnVal = LD_REG_BYTE_UNPRIV;
+                encodeType = LDST_UNPRIV;
             } else {
                 if (A) {
                     // load register byte (A8-422)
                     returnVal = LD_REG_BYTE;
+                    encodeType = LDST_REG;
                 } else {
                     if (Rn == 0xF) {
                         // load register literal byte (A8-420)
                         returnVal = LD_REG_LIT_BYTE;
+                        encodeType = LDST_LIT;
                     } else {
                         // load register immediate byte (A8-418)
                         returnVal = LD_REG_IMM_BYTE;
+                        encodeType = LDST_IMM;
                     }
                 }
             }
@@ -219,11 +229,53 @@ load_store_e decode_load_store(insn_op_t* insn_data, uint32_t insn_bits) {
         break;
     }
 
-    // not yet
-    // insn_data->bitfield.op1 = op1;
-    // insn_data->bitfield.Rn  = Rn;
-    // insn_data->bitfield.A   = A;
-    // insn_data->bitfield.B   = B;
+    if (!returnVal)
+        return returnVal;
+
+    ////////////////////////// load struct values //////////////////////////
+    // sign bit (23)
+    insn_data->bitfield.add = (op1 & 0x08);
+    // source register, bits 12-15
+    insn_data->bitfield.Rt = GET_LDST_RT_BITS(insn_bits);
+    // bit 24
+    uint8_t P = op1 & 0x10;
+    uint8_t index = (P == 0x1);
+    uint8_t wback = ( (P == 0x0) || ((op1 & 0x2) == 0x1) );
+
+    switch (encodeType) {
+    case LDST_UNPRIV:
+        // if bit 25 is set, then it's A2, otherwise, A1
+        if (A) {
+            insn_data->imm.imm5 = GET_LDST_IMM5(insn_bits);
+            insn_data->bitfield.Rm = GET_LDST_RM_BITS(insn_bits);
+            insn_data->bitfield.type = GET_LDST_TYPE(insn_bits);
+        } else {
+            insn_data->imm.imm12 = GET_LDST_IMM12(insn_bits);
+        }
+        break;
+    case LDST_REG:
+        insn_data->imm.imm5 = GET_LDST_IMM5(insn_bits);
+        insn_data->bitfield.Rm = GET_LDST_RM_BITS(insn_bits);
+        insn_data->bitfield.type = GET_LDST_TYPE(insn_bits);
+        insn_data->bitfield.index = index;
+        insn_data->bitfield.wback = wback;
+        break;
+    case LDST_IMM:
+        insn_data->imm.imm12 = GET_LDST_IMM12(insn_bits);
+        insn_data->bitfield.index = index;
+        insn_data->bitfield.wback = wback;
+        break;
+    case LDST_LIT:
+        // TODO: this is zero extended to be 32 bits
+        insn_data->imm.imm12 = GET_LDST_IMM12(insn_bits);
+        break;
+    default:
+        break;
+    }
+
+    // record the type
+    insn_data->type.load_store = returnVal;
+
     return returnVal;
 }
 
