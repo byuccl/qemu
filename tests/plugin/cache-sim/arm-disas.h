@@ -138,23 +138,29 @@ typedef enum sync_load_store {
 
 
 /*************************** instruction parameters ***************************/
+// TODO: use unions for things that can overlap
 struct insn_op {
     uint32_t dataAddr;
     struct bit_field_s {
         uint8_t cond;
         uint8_t Rn;
         uint8_t Rt;
+        uint8_t Rt2;
         uint8_t Rm;
-        uint8_t type;
+        uint8_t Rd;     // also known as CRd
+        uint8_t type;   // also the opcode for LDM_EXC
         uint8_t add;
         uint8_t index;
         uint8_t wback;
+        uint8_t coproc;
     } bitfield;
     // you can only have one immediate field in any instruction
     union imm_u {
+        uint32_t imm32;     // this is comes from zero-extending something smaller
         uint16_t imm12;
         uint8_t imm5;
         uint8_t imm8;
+        uint16_t regList;   // bit-encoded register list (pop, push, ldm, stm, etc)
     } imm;
     // what is the kind of instruction
     union type_u {
@@ -171,10 +177,10 @@ typedef struct insn_op insn_op_t;
 /**************************** function prototypes *****************************/
 
 load_store_e decode_load_store(insn_op_t* insn_data, uint32_t insn_bits);
-extra_load_store_e decode_extra_load_store(uint32_t insn_bits);
-block_load_store_e decode_block_load_store(uint32_t insn_bits);
-cp_load_store_e INSN_IS_COPROC_LOAD_STORE(uint32_t insn);
-sync_load_store_e decode_sync_load_store(uint32_t insn);
+extra_load_store_e decode_extra_load_store(insn_op_t* insn_data, uint32_t insn_bits);
+block_load_store_e decode_block_load_store(insn_op_t* insn_data, uint32_t insn_bits);
+cp_load_store_e INSN_IS_COPROC_LOAD_STORE(insn_op_t* insn_data, uint32_t insn);
+sync_load_store_e decode_sync_load_store(insn_op_t* insn_data, uint32_t insn);
 
 
 #endif  /* __ARM_DISAS_H */

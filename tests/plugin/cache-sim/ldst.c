@@ -106,6 +106,7 @@ static void put_cbs_in_tbs(qemu_plugin_id_t id, struct qemu_plugin_tb* tb) {
         // no, the encoding matches the ARM reference
         // however, this won't work if it's a T-32 instruction
         //  have to get the last 2 bytes first, then the first 2
+        // TODO: look at this - https://developer.gnome.org/glib/stable/glib-Byte-Order-Macros.html
         uint32_t insn_bits = 0;
         int i;
         for (i = insn_size - 1; i >= 0; i--) {
@@ -118,6 +119,8 @@ static void put_cbs_in_tbs(qemu_plugin_id_t id, struct qemu_plugin_tb* tb) {
         // TODO: would this be able to go in some kind of table where the
         //  encoded bits are the key? then we would only have to translate
         //  each instruction encoding once
+        // https://blog.sensecodons.com/2012/01/glib-ghashtable-and-gdirecthash.html
+        // https://developer.gnome.org/glib/stable/glib-Hash-Tables.html
         insn_op_t insn_op_data;
 
         // decode the instruction data
@@ -137,7 +140,7 @@ static void put_cbs_in_tbs(qemu_plugin_id_t id, struct qemu_plugin_tb* tb) {
 
         // check for block ld/st
         if (INSN_IS_BLOCK_LOAD_STORE(insn_bits)) {
-            block_load_store_e type = decode_block_load_store(insn_bits);
+            block_load_store_e type = decode_block_load_store(&insn_op_data, insn_bits);
             if (type) {
                 if (type < LD_BLK_TYPE_BASE) {
                     // store
@@ -154,7 +157,7 @@ static void put_cbs_in_tbs(qemu_plugin_id_t id, struct qemu_plugin_tb* tb) {
         int is_extra = INSN_IS_EXTRA_LOAD_STORE(insn_bits);
         // and also synchronization primitives
         if (is_extra == MISC_IS_SYNC_PRIMITIVE) {
-            sync_load_store_e type = decode_sync_load_store(insn_bits);
+            sync_load_store_e type = decode_sync_load_store(&insn_op_data, insn_bits);
             if (type >= SWAP_WORD) {
                 // it's both!
                 SET_STORE_CB(insn, insn_vaddr);
@@ -169,7 +172,7 @@ static void put_cbs_in_tbs(qemu_plugin_id_t id, struct qemu_plugin_tb* tb) {
             continue;
         }
         else if (is_extra) {
-            extra_load_store_e type = decode_extra_load_store(insn_bits);
+            extra_load_store_e type = decode_extra_load_store(&insn_op_data, insn_bits);
             if (type) {
                 if (type < LD_EXTRA_TYPE_BASE) {
                     // store
@@ -183,7 +186,8 @@ static void put_cbs_in_tbs(qemu_plugin_id_t id, struct qemu_plugin_tb* tb) {
         }
 
         // check for coprocessor ld/st
-        cp_load_store_e coproc_ldst = INSN_IS_COPROC_LOAD_STORE(insn_bits);
+        cp_load_store_e coproc_ldst = \
+                INSN_IS_COPROC_LOAD_STORE(&insn_op_data, insn_bits);
         if (coproc_ldst) {
             if (coproc_ldst < LD_CP_TYPE_BASE) {
                 // store
@@ -215,13 +219,7 @@ static void put_cbs_in_tbs(qemu_plugin_id_t id, struct qemu_plugin_tb* tb) {
 
 
 /*
- * Expected count, from using strings:
- * Can't use this as a base line, because things like pop/push
- *  also access memory, and they don't have the same prefix.
- */
-
-/*
- * From using bit compares:
+ * Current numbers for test (MxM):
  * 
  * insn count: 115390281
  * load count:  78841153
