@@ -46,6 +46,7 @@ static void parse_instruction(unsigned int vcpu_index, void* userdata);
 static void parse_ld(unsigned int vcpu_index, qemu_plugin_meminfo_t info,
                         uint64_t vaddr, void* userdata);
 static void parse_st(unsigned int vcpu_index, void* userdata);
+static void check_insn_count(unsigned int vcpu_index, void* userdata);
 static void plugin_exit(qemu_plugin_id_t id, void* p);
 static void put_cbs_in_tbs(qemu_plugin_id_t id, struct qemu_plugin_tb* tb);
 
@@ -60,6 +61,7 @@ static const char* str_prefix_lower = "st";
 #endif
 
 static injection_plan_t plan;
+static uint32_t faultDone = 0;
 
 #ifdef DEBUG_INSN_DISAS
 char lastInsnStr[LAST_INSN_BUF_SIZE];
@@ -73,6 +75,15 @@ char lastInsnStr[LAST_INSN_BUF_SIZE];
  * Based on code in insn.c and mem.c plugins
  */
 static void put_cbs_in_tbs(qemu_plugin_id_t id, struct qemu_plugin_tb* tb) {
+    // we can disable this from the plugin init
+    if (!faultDone)
+    {
+        // on the translation of each tb, put a callback to check cycle count
+        qemu_plugin_register_vcpu_tb_exec_cb(tb, check_insn_count,
+                                            QEMU_PLUGIN_CB_NO_REGS,     // TODO: RW for
+                                            (void*)NULL);               //  injection
+    }
+
     // get the number of instructions in this tb
     size_t n = qemu_plugin_tb_n_insns(tb);
     size_t i;
@@ -274,6 +285,29 @@ static void parse_st(unsigned int vcpu_index, void* userdata)
     icache_load((uint64_t)userdata);
 }
 
+/*
+ * Function is called every time a tb is executed.
+ * This is the stub for where fault injection will be performed.
+ */
+static void check_insn_count(unsigned int vcpu_index, void* userdata)
+{
+    // see if it's time to inject the fault
+    if ( (!faultDone) && (insn_count >= plan.sleepCycles) )
+    {
+        faultDone = 1;
+
+        g_autoptr(GString) out = g_string_new("");
+        g_string_printf(out, "Injecting fault...\n");
+
+        // print out about the injection
+        g_string_append_printf(out, "slept for %lu cycles\n", insn_count);
+        g_string_append_printf(out, "injected at row %lu, set %lu, bit 0x%lX\n",
+                                plan.cacheRow, plan.cacheSet, plan.cacheBit);
+
+        qemu_plugin_outs(out->str);
+    }
+}
+
 
 /*
  * Register the plugin.
@@ -283,6 +317,7 @@ static void parse_st(unsigned int vcpu_index, void* userdata)
  *  cacheRow    - the row in the cache to inject fault
  *  cacheSet    - which set block
  *  cacheBit    - which bit in the block
+ *  cacheName   - which cache to inject into (NYI)
  *  doTag       - if the bit should be in the tag bits instead of data (NYI)
  */
 QEMU_PLUGIN_EXPORT int qemu_plugin_install(qemu_plugin_id_t id,
@@ -326,15 +361,19 @@ QEMU_PLUGIN_EXPORT int qemu_plugin_install(qemu_plugin_id_t id,
 
     // optional - no arguments means only profiling
     if (sleepCycles) {
-        // init the icache simulation
-        icache_init(32768, 4, 32, POLICY_RANDOM);
         plan.sleepCycles = sleepCycles;
         plan.cacheRow = cacheRow;
         plan.cacheSet = cacheSet;
         plan.cacheBit = cacheBit;        
+    } else if (argc == 0) {
+        // only profiling
+        faultDone = 1;
     } else {
-        // only profiling - NYI
+        qemu_plugin_outs("Error parsing plugin arguments!\n");
+        return !0;
     }
+    // init the icache simulation
+    icache_init(32768, 4, 32, POLICY_RANDOM);
 
     // `info` argument has information about qemu system state
     // see qemu_info_t in include/qemu/qemu-plugin.h for more details
@@ -359,11 +398,6 @@ static void plugin_exit(qemu_plugin_id_t id, void* p) {
     g_string_printf(out, "insn count: %ld\n", insn_count);
     g_string_append_printf(out, "load count: %ld\n", load_count);
     g_string_append_printf(out, "store count: %ld\n", store_count);
-
-    // print out about the injection
-    g_string_append_printf(out, "slept for %lu cycles\n", plan.sleepCycles);
-    g_string_append_printf(out, "injected at row %lu, set %lu, bit 0x%lX\n",
-                            plan.cacheRow, plan.cacheSet, plan.cacheBit);
 
     qemu_plugin_outs(out->str);
 
