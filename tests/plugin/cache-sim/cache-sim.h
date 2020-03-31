@@ -5,8 +5,9 @@
 #include <stdint.h>
 
 
-// addresses for ARM 32 bit
-typedef uint32_t aarch32_addr_t;
+// this type defines the size of address word on the target platform
+// change it to match your needs
+typedef uint32_t arch_word_t;
 
 // options for replacement
 enum cache_policy_e {
@@ -24,7 +25,7 @@ typedef enum cache_result_e cache_result_t;
 
 // create a type for a cache entry
 struct cache_entry {
-    aarch32_addr_t tag;
+    arch_word_t tag;
     uint8_t valid;
 };
 typedef struct cache_entry cache_entry_t;

@@ -47,13 +47,21 @@ To build only for this target for the first time will take 1-3 minutes, dependin
 More Information
 ==================
 
-Creating Helper Functions
+Creating TCG Plugins
 **************************
 See the Qemu documentation on the Tiny Code Generator (TCG)
 
 * `<https://wiki.qemu.org/Documentation/TCG>`_
 
-Currently, we do not support ARM Thumb instructions.
+And the documentation for plugins.
+
+* `<https://qemu.readthedocs.io/en/stable/devel/tcg-plugins.html>`_
+
+We also have a page written up about our plugin
+
+* `<https://github.com/byuccl/qemu/blob/cache-sim/ccl-changes/plugins.md>`_
+* `<https://github.com/byuccl/qemu/blob/cache-sim/ccl-changes/cache-sim.md>`_
+
 
 
 Contact

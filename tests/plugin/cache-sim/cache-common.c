@@ -94,8 +94,8 @@ cache_result_t cache_load_common(cache_t* cp, uint64_t vaddr)
     // keep track of next victim
     uint32_t nextRowIdx = 0;
 
-    // convert 64-bit address
-    aarch32_addr_t addr = (aarch32_addr_t) vaddr;
+    // convert 64-bit address to be the size of word of the guest architecture
+    arch_word_t addr = (arch_word_t) vaddr;
 
     // uint32_t blockOffsetBits = cp->maskInfo.blockOffsetMask & addr;
     uint32_t rowIdx = (addr >> cp->maskInfo.rowShift) & cp->maskInfo.rowMask;
@@ -169,8 +169,8 @@ cache_result_t cache_load_common(cache_t* cp, uint64_t vaddr)
  */
 cache_result_t cache_store_common(cache_t* cp, uint64_t vaddr)
 {
-    // convert 64-bit address
-    aarch32_addr_t addr = (aarch32_addr_t) vaddr;
+    // convert 64-bit address to be the size of word of the guest architecture
+    arch_word_t addr = (arch_word_t) vaddr;
 
     // uint32_t blockOffsetBits = cp->maskInfo.blockOffsetMask & addr;
     uint32_t rowIdx = (addr >> cp->maskInfo.rowShift) & cp->maskInfo.rowMask;

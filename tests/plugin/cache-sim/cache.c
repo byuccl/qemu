@@ -90,7 +90,7 @@ static void put_cbs_in_tbs(qemu_plugin_id_t id, struct qemu_plugin_tb* tb) {
         strncpy(lastInsnStr, disas_str, LAST_INSN_BUF_SIZE);
 #endif
 
-        if ( (insn_vaddr <= textEnd) && (insn_vaddr >= textBegin) ) {
+        if ( (insn_vaddr < textEnd) && (insn_vaddr >= textBegin) ) {
             // register a callback for everything else to track icache uses
             qemu_plugin_register_vcpu_insn_exec_cb(
                                         insn, parse_instruction,
@@ -132,7 +132,7 @@ static void parse_mem(unsigned int vcpu_index, qemu_plugin_meminfo_t info,
     }
 
     // skip instruction loads, already taken care of
-    if ( (addr <= textEnd) && (addr >= textBegin) ) {
+    if ( (addr < textEnd) && (addr >= textBegin) ) {
         return;
     }
 
