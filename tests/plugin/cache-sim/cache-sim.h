@@ -41,8 +41,10 @@ typedef struct cache_mask cache_mask_t;
 // this will represent a cache
 struct cache_stats {
     cache_entry_t** table;  // pointer to the table containing the addresses
-    uint64_t hits;          // number of times requested address in cache
-    uint64_t misses;        // number of times requested address NOT in cache
+    uint64_t load_hits;     // number of times requested address in cache
+    uint64_t load_misses;   // number of times requested address NOT in cache
+    uint64_t store_hits;    // same but for writing
+    uint64_t store_misses;  // same but for writing
     uint32_t cacheSize;     // total number of bytes of data in the cache
     uint32_t rows;          // number of rows in the cache
     uint32_t associativity; // number of blocks in each row

@@ -14,8 +14,10 @@
 
 #include <qemu-plugin.h>
 
-#include "icache.h"
 #include "injection.h"
+#include "icache.h"
+#include "dcache.h"
+#include "l2cache.h"
 
 // required export for it to build properly
 QEMU_PLUGIN_EXPORT int qemu_plugin_version = QEMU_PLUGIN_VERSION;
@@ -27,17 +29,6 @@ QEMU_PLUGIN_EXPORT int qemu_plugin_version = QEMU_PLUGIN_VERSION;
 #ifdef DEBUG_INSN_DISAS
 #define LAST_INSN_BUF_SIZE 64
 #endif
-
-// useful macros for registering a specific type of callback
-#define SET_LOAD_CB(insn, userp) \
-                    qemu_plugin_register_vcpu_mem_cb(insn, parse_ld,    \
-                                    QEMU_PLUGIN_CB_R_REGS,              \
-                                    QEMU_PLUGIN_MEM_R,                  \
-                                    (void*)userp)
-#define SET_STORE_CB(insn, userp) \
-                    qemu_plugin_register_vcpu_insn_exec_cb(insn, parse_st,  \
-                                    QEMU_PLUGIN_CB_R_REGS,                  \
-                                    (void*)userp)
 
 
 /**************************** function prototypes *****************************/
@@ -54,11 +45,8 @@ static uint64_t insn_count = 0;
 static uint64_t load_count = 0;
 static uint64_t store_count = 0;
 static uint64_t textBegin = 0, textEnd = 0;     // begin and end addresses of .text
-static uint64_t dcache_count = 0;
 
 #ifdef DEBUG_INSN_DISAS
-static const char* ld_prefix_lower = "ld";
-static const char* str_prefix_lower = "st";
 char lastInsnStr[LAST_INSN_BUF_SIZE];
 #endif
 
@@ -70,7 +58,7 @@ static uint32_t faultDone = 0;
 
 /* 
  * Will register a callback with each instruction executed
- * Based on code in insn.c and mem.c plugins
+ * Based on code in insn.c, hotpages.c, and mem.c plugins
  */
 static void put_cbs_in_tbs(qemu_plugin_id_t id, struct qemu_plugin_tb* tb) {
     // we can disable this from the plugin init
@@ -79,7 +67,7 @@ static void put_cbs_in_tbs(qemu_plugin_id_t id, struct qemu_plugin_tb* tb) {
         // on the translation of each tb, put a callback to check cycle count
         qemu_plugin_register_vcpu_tb_exec_cb(tb, check_insn_count,
                                             QEMU_PLUGIN_CB_NO_REGS,     // TODO: RW for
-                                            (void*)NULL);               //  injection
+                                            (void*)NULL);               //  injection?
     }
 
     // get the number of instructions in this tb
@@ -118,23 +106,6 @@ static void put_cbs_in_tbs(qemu_plugin_id_t id, struct qemu_plugin_tb* tb) {
 
 
 /*
- * Current numbers for test (MxM):
- * 
- * insn count: 115390281
- * load count:  78841153
- * store count:  2862292
- *
- * A5.5 - Table A5-21 - page 214
- * 0x105ae4: 0x2300e9d1 - ldrd r2, r3, [r1]
- *  actually e9d1 2300, because it's in 32-bit Thumb mode for strlen()
- * 1110 1001 1101 0001 0010 0011 0000 0000
- * see A6.3.6, also A6.3, table A6-9 on page 230
- * So how do we determine if an instruction is in Thumb mode, especially
- *  when it still is a 32-bit instruction?
- */
-
-
-/*
  * Function is called every time a non-memory instruction is executed.
  */
 static void parse_instruction(unsigned int vcpu_index, void* userdata)
@@ -168,12 +139,12 @@ static void parse_mem(unsigned int vcpu_index, qemu_plugin_meminfo_t info,
     // do the right thing
     if (qemu_plugin_mem_is_store(info)) {
         store_count += 1;
+        dcache_store(addr);
     } else {
         load_count += 1;
+        dcache_load(addr);
     }
-
-    // TODO: dcache accesses
-    dcache_count += 1;
+    // TODO: swaps?
 }
 
 
@@ -273,9 +244,13 @@ QEMU_PLUGIN_EXPORT int qemu_plugin_install(qemu_plugin_id_t id,
         qemu_plugin_outs("Error parsing plugin arguments!\n");
         return !0;
     }
-    // init the icache simulation
-    icache_init(ICACHE_SIZE_BYTES, ICACHE_ASSOCIATIVITY, 
+    // init the cache simulation
+    icache_init(ICACHE_SIZE_BYTES, ICACHE_ASSOCIATIVITY,
                 ICACHE_BLOCK_SIZE, ICACHE_POLICY);
+    dcache_init(DCACHE_SIZE_BYTES, DCACHE_ASSOCIATIVITY,
+                DCACHE_BLOCK_SIZE, DCACHE_POLICY);
+    l2cache_init(L2CACHE_SIZE_BYTES, L2CACHE_ASSOCIATIVITY,
+                L2CACHE_BLOCK_SIZE, L2CACHE_POLICY);
 
     // `info` argument has information about qemu system state
     // see qemu_info_t in include/qemu/qemu-plugin.h for more details
@@ -303,14 +278,15 @@ static void plugin_exit(qemu_plugin_id_t id, void* p) {
     // based on example in mem.c
     g_autoptr(GString) out = g_string_new("");
     
-    g_string_printf(out, "insn count: %10ld\n", insn_count);
-    g_string_append_printf(out, "load count: %10ld\n", load_count);
-    g_string_append_printf(out, "store count: %10ld\n", store_count);
-    g_string_append_printf(out, "dcache count: %10ld\n", dcache_count);
+    g_string_printf(out,        "insn count:           %10ld\n", insn_count);
+    g_string_append_printf(out, "load count:           %10ld\n", load_count);
+    g_string_append_printf(out, "store count:          %10ld\n", store_count);
 
     qemu_plugin_outs(out->str);
 
     icache_stats();
+    dcache_stats();
+    l2cache_stats();
 }
 
 /*
@@ -319,30 +295,4 @@ static void plugin_exit(qemu_plugin_id_t id, void* p) {
  *  be responsible for changing values in memory (and tag bits in the future)
  * The fault injector will tell the plugin where to inject fault, and after how long.
  * Need a function to query the current number of cycles since start.
- */
-
-/*
- * hotpages report for MxM
- * Addr,             RCPUs, Reads,      WCPUs, Writes
- * 0x00000000106000, 0x0001, 30630000,  0x0000, 0
- * 0x00000002910000, 0x0001, 24438155,  0x0001, 919211
- * 0x00000000107000, 0x0001, 23371005,  0x0000, 0
- * 0x00000000110000, 0x0001, 900004,    0x0001, 901926
- * 0x000000e0000000, 0x0001, 25,        0x0001, 25
- * 0x00000000105000, 0x0001, 42,        0x0000, 0
- * 0x00000000100000, 0x0001, 36,        0x0000, 0
- * 0x000000f8f00000, 0x0001, 7,         0x0001, 6
- * 0x000000f8f02000, 0x0001, 4,         0x0001, 7
- * 0x000000f8000000, 0x0000, 0,         0x0001, 3
- * 0x00000000102000, 0x0001, 3,         0x0000, 0
- * 
- * Totals:
- *                           79339281           1821178
- * Instruction loads:
- *                           54001086
- */
-
-/*
- * icache hits: 3532262
- * icache misses: 111730998
  */
