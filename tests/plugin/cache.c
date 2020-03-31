@@ -14,9 +14,8 @@
 
 #include <qemu-plugin.h>
 
-#include "icache.h"
-#include "injection.h"
-#include "arm-disas.h"
+#include "cache-sim/icache.h"
+#include "cache-sim/injection.h"
 
 // required export for it to build properly
 QEMU_PLUGIN_EXPORT int qemu_plugin_version = QEMU_PLUGIN_VERSION;
@@ -43,29 +42,28 @@ QEMU_PLUGIN_EXPORT int qemu_plugin_version = QEMU_PLUGIN_VERSION;
 
 /**************************** function prototypes *****************************/
 static void parse_instruction(unsigned int vcpu_index, void* userdata);
-static void parse_ld(unsigned int vcpu_index, qemu_plugin_meminfo_t info,
+static void parse_mem(unsigned int vcpu_index, qemu_plugin_meminfo_t info,
                         uint64_t vaddr, void* userdata);
-static void parse_st(unsigned int vcpu_index, void* userdata);
 static void check_insn_count(unsigned int vcpu_index, void* userdata);
 static void plugin_exit(qemu_plugin_id_t id, void* p);
 static void put_cbs_in_tbs(qemu_plugin_id_t id, struct qemu_plugin_tb* tb);
+
 
 /********************************** globals ***********************************/
 static uint64_t insn_count = 0;
 static uint64_t load_count = 0;
 static uint64_t store_count = 0;
+static uint64_t textBegin = 0, textEnd = 0;     // begin and end addresses of .text
+static uint64_t dcache_count = 0;
 
-#if defined(USE_STRING_COMPARE) || defined(DEBUG_INSN_DISAS)
+#ifdef DEBUG_INSN_DISAS
 static const char* ld_prefix_lower = "ld";
 static const char* str_prefix_lower = "st";
+char lastInsnStr[LAST_INSN_BUF_SIZE];
 #endif
 
 static injection_plan_t plan;
 static uint32_t faultDone = 0;
-
-#ifdef DEBUG_INSN_DISAS
-char lastInsnStr[LAST_INSN_BUF_SIZE];
-#endif
 
 
 /********************************* functions **********************************/
@@ -104,128 +102,17 @@ static void put_cbs_in_tbs(qemu_plugin_id_t id, struct qemu_plugin_tb* tb) {
         strncpy(lastInsnStr, disas_str, LAST_INSN_BUF_SIZE);
 #endif
 
-        // data is a pointer to a GByteArray
-        // https://developer.gnome.org/glib/stable/glib-Byte-Arrays.html#GByteArray
-        const void* insn_data = qemu_plugin_insn_data(insn);
-        size_t insn_size = qemu_plugin_insn_size(insn);
-        if (insn_size != 4) {
-            // error, we expected only ARM 32-bit instruction, no aarch64 or thumb
+        if ( (insn_vaddr <= textEnd) && (insn_vaddr >= textBegin) ) {
+            // register a callback for everything else to track icache uses
+            qemu_plugin_register_vcpu_insn_exec_cb(
+                                        insn, parse_instruction,
+                                        QEMU_PLUGIN_CB_NO_REGS,
+                                        (void*)insn_vaddr);
         }
-
-        const guint8* data_array = (guint8*)insn_data;
-        // do we need to worry about endianness?
-        // no, the encoding matches the ARM reference
-        // however, this won't work if it's a T-32 instruction
-        //  have to get the last 2 bytes first, then the first 2
-        // TODO: look at this - https://developer.gnome.org/glib/stable/glib-Byte-Order-Macros.html
-        uint32_t insn_bits = 0;
-        int i;
-        for (i = insn_size - 1; i >= 0; i--) {
-            insn_bits |= (data_array[i] << (i * 8));
-        }
-
-        // we're going to gather information about the instruction
-        // TODO: this will need to go in some kind of table, and pass the
-        //  base address in to the callbacks
-        // TODO: would this be able to go in some kind of table where the
-        //  encoded bits are the key? then we would only have to translate
-        //  each instruction encoding once
-        // https://blog.sensecodons.com/2012/01/glib-ghashtable-and-gdirecthash.html
-        // https://developer.gnome.org/glib/stable/glib-Hash-Tables.html
-        insn_op_t insn_op_data;
-
-        // decode the instruction data
-        if (INSN_IS_LOAD_STORE(insn_bits)) {
-            load_store_e type = decode_load_store(&insn_op_data, insn_bits);
-            if (type) {
-                if (type < LD_TYPE_BASE) {
-                    // store
-                    SET_STORE_CB(insn, insn_vaddr);
-                } else {
-                    // load
-                    SET_LOAD_CB(insn, insn_vaddr);
-                }
-                continue;
-            }
-        }
-
-        // check for block ld/st
-        if (INSN_IS_BLOCK_LOAD_STORE(insn_bits)) {
-            block_load_store_e type = decode_block_load_store(&insn_op_data, insn_bits);
-            if (type) {
-                if (type < LD_BLK_TYPE_BASE) {
-                    // store
-                    SET_STORE_CB(insn, insn_vaddr);
-                } else {
-                    // load
-                    SET_LOAD_CB(insn, insn_vaddr);
-                }
-                continue;
-            }
-        }
-
-        // check for extra ld/st
-        int is_extra = INSN_IS_EXTRA_LOAD_STORE(insn_bits);
-        // and also synchronization primitives
-        if (is_extra == MISC_IS_SYNC_PRIMITIVE) {
-            sync_load_store_e type = decode_sync_load_store(&insn_op_data, insn_bits);
-            if (type >= SWAP_WORD) {
-                // it's both!
-                SET_STORE_CB(insn, insn_vaddr);
-                SET_LOAD_CB(insn, insn_vaddr);
-            } else if (type < LD_SYNC_TYPE_BASE) {
-                // store
-                SET_STORE_CB(insn, insn_vaddr);
-            } else {
-                // load
-                SET_LOAD_CB(insn, insn_vaddr);
-            }
-            continue;
-        }
-        else if (is_extra) {
-            extra_load_store_e type = decode_extra_load_store(&insn_op_data, insn_bits);
-            if (type) {
-                if (type < LD_EXTRA_TYPE_BASE) {
-                    // store
-                    SET_STORE_CB(insn, insn_vaddr);
-                } else {
-                    // load
-                    SET_LOAD_CB(insn, insn_vaddr);
-                }
-                continue;
-            }
-        }
-
-        // check for coprocessor ld/st
-        cp_load_store_e coproc_ldst = \
-                INSN_IS_COPROC_LOAD_STORE(&insn_op_data, insn_bits);
-        if (coproc_ldst) {
-            if (coproc_ldst < LD_CP_TYPE_BASE) {
-                // store
-                SET_STORE_CB(insn, insn_vaddr);
-            } else {
-                // load
-                SET_LOAD_CB(insn, insn_vaddr);
-            }
-            continue;
-        }
-
-#ifdef DEBUG_INSN_DISAS
-        // check for any stragglers
-        if ((memcmp(disas_str, ld_prefix_lower, 2) == 0) ||
-            (memcmp(disas_str, str_prefix_lower, 2) == 0))
-        {
-            g_autofree gchar *out;
-            out = g_strdup_printf("insn: %s\n", disas_str);
-            qemu_plugin_outs(out);
-        }
-#endif
-
-        // register a callback for everything else to track icache uses
-        qemu_plugin_register_vcpu_insn_exec_cb(
-                                    insn, parse_instruction,
-                                    QEMU_PLUGIN_CB_NO_REGS,
-                                    (void*)insn_vaddr);
+        // watch for data loads/stores
+        qemu_plugin_register_vcpu_mem_cb(insn, parse_mem,
+                                        QEMU_PLUGIN_CB_NO_REGS,
+                                        QEMU_PLUGIN_MEM_RW, NULL);
     }
 }
 
@@ -258,33 +145,37 @@ static void parse_instruction(unsigned int vcpu_index, void* userdata)
 
 
 /*
- * Function is called every time a load instruction is executed.
+ * Function is called every time a load or store instruction is executed.
  */
-static void parse_ld(unsigned int vcpu_index, qemu_plugin_meminfo_t info,
+static void parse_mem(unsigned int vcpu_index, qemu_plugin_meminfo_t info,
                         uint64_t vaddr, void* userdata)
 {
     struct qemu_plugin_hwaddr* hwaddr = qemu_plugin_get_hwaddr(info, vaddr);
-    (void)hwaddr;
-    // if hwaddr->is_io == true, then use hwaddr->v.io for section and offset
-    //  (see also include/exec/memory.h for definition of MemoryRegionSection)
-    // if hwaddr->is_io == false, then use hwaddr->v.ram.hostaddr
-    // include/qemu/plugin-memory.h
+    uint64_t addr;
 
-    load_count += 1;
-    insn_count += 1;
-    icache_load((uint64_t)userdata);
+    // get the address (see hotpages.c)
+    if (hwaddr && !qemu_plugin_hwaddr_is_io(hwaddr)) {
+        addr = (uint64_t) qemu_plugin_hwaddr_device_offset(hwaddr);
+    } else {
+        addr = vaddr;
+    }
+
+    // skip instruction loads, already taken care of
+    if ( (addr <= textEnd) && (addr >= textBegin) ) {
+        return;
+    }
+
+    // do the right thing
+    if (qemu_plugin_mem_is_store(info)) {
+        store_count += 1;
+    } else {
+        load_count += 1;
+    }
+
+    // TODO: dcache accesses
+    dcache_count += 1;
 }
 
-
-/*
- * Function is called every time a store instruction is executed.
- */
-static void parse_st(unsigned int vcpu_index, void* userdata)
-{
-    store_count += 1;
-    insn_count += 1;
-    icache_load((uint64_t)userdata);
-}
 
 /*
  * Function is called every time a tb is executed.
@@ -332,8 +223,9 @@ QEMU_PLUGIN_EXPORT int qemu_plugin_install(qemu_plugin_id_t id,
     uint64_t cacheRow, cacheSet, cacheBit;
 
     // allow all args or none
-    uint32_t numArgs = 4;
-    if (argc > 0 && argc != numArgs) {
+    uint32_t numArgs = 6;
+    if ((argc < 2) || (argc > 2 && argc != numArgs) )
+    {
         qemu_plugin_outs("Wrong number of arguments to plugin!\n");
         return !0;
     }
@@ -343,15 +235,21 @@ QEMU_PLUGIN_EXPORT int qemu_plugin_install(qemu_plugin_id_t id,
         char* p = argv[i];
         switch (i) {
             case 0:
-                sleepCycles = strtoul(p, NULL, 10);
+                textBegin = strtoul(p, NULL, 16);
                 break;
             case 1:
-                cacheRow = strtoul(p, NULL, 10);
+                textEnd = strtoul(p, NULL, 16);
                 break;
             case 2:
-                cacheSet = strtoul(p, NULL, 10);
+                sleepCycles = strtoul(p, NULL, 10);
                 break;
             case 3:
+                cacheRow = strtoul(p, NULL, 10);
+                break;
+            case 4:
+                cacheSet = strtoul(p, NULL, 10);
+                break;
+            case 5:
                 cacheBit = strtoul(p, NULL, 10);
                 break;
             default:
@@ -385,6 +283,12 @@ QEMU_PLUGIN_EXPORT int qemu_plugin_install(qemu_plugin_id_t id,
     // to be run at exit
     qemu_plugin_register_atexit_cb(id, plugin_exit, NULL);
 
+    // print status
+    g_autoptr(GString) out = g_string_new("");
+    g_string_printf(out, "Initializing...\n");
+    g_string_append_printf(out, "text: 0x%lX - 0x%lX\n", textBegin, textEnd);
+    qemu_plugin_outs(out->str);
+
     return 0;
 }
 
@@ -399,6 +303,7 @@ static void plugin_exit(qemu_plugin_id_t id, void* p) {
     g_string_printf(out, "insn count: %ld\n", insn_count);
     g_string_append_printf(out, "load count: %ld\n", load_count);
     g_string_append_printf(out, "store count: %ld\n", store_count);
+    g_string_append_printf(out, "dcache count: %ld\n", dcache_count);
 
     qemu_plugin_outs(out->str);
 
@@ -411,4 +316,25 @@ static void plugin_exit(qemu_plugin_id_t id, void* p) {
  *  be responsible for changing values in memory (and tag bits in the future)
  * The fault injector will tell the plugin where to inject fault, and after how long.
  * Need a function to query the current number of cycles since start.
+ */
+
+/*
+ * hotpages report for MxM
+ * Addr,             RCPUs, Reads,      WCPUs, Writes
+ * 0x00000000106000, 0x0001, 30630000,  0x0000, 0
+ * 0x00000002910000, 0x0001, 24438155,  0x0001, 919211
+ * 0x00000000107000, 0x0001, 23371005,  0x0000, 0
+ * 0x00000000110000, 0x0001, 900004,    0x0001, 901926
+ * 0x000000e0000000, 0x0001, 25,        0x0001, 25
+ * 0x00000000105000, 0x0001, 42,        0x0000, 0
+ * 0x00000000100000, 0x0001, 36,        0x0000, 0
+ * 0x000000f8f00000, 0x0001, 7,         0x0001, 6
+ * 0x000000f8f02000, 0x0001, 4,         0x0001, 7
+ * 0x000000f8000000, 0x0000, 0,         0x0001, 3
+ * 0x00000000102000, 0x0001, 3,         0x0000, 0
+ * 
+ * Totals:
+ *                           79339281           1821178
+ * Instruction loads:
+ *                           54001086
  */

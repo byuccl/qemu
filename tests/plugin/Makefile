@@ -15,6 +15,8 @@ NAMES += hotblocks
 NAMES += howvec
 NAMES += hotpages
 NAMES += ldst
+NAMES += cache
+CACHE_SRCS := icache.o cache.o
 LDST_SRCS := icache.o arm-disas.o ldst.o
 
 SONAMES := $(addsuffix .so,$(addprefix lib,$(NAMES)))
@@ -25,6 +27,9 @@ QEMU_CFLAGS += -I$(SRC_PATH)/include/qemu
 all: $(SONAMES)
 
 libldst.so: $(LDST_SRCS)
+	$(CC) -shared -Wl,-soname,$@ -o $@ $^ $(LDLIBS)
+
+libcache.so: $(CACHE_SRCS)
 	$(CC) -shared -Wl,-soname,$@ -o $@ $^ $(LDLIBS)
 
 lib%.so: %.o
