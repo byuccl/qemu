@@ -24,7 +24,7 @@ typedef enum cache_result_e cache_result_t;
 
 // create a type for a cache entry
 struct cache_entry {
-    aarch32_addr_t addr;
+    aarch32_addr_t tag;
     uint8_t valid;
 };
 typedef struct cache_entry cache_entry_t;
@@ -47,6 +47,10 @@ struct cache_stats {
     uint32_t rows;          // number of rows in the cache
     uint32_t associativity; // number of blocks in each row
     uint32_t blockSize;     // size of cache block (bytes)
+    union replace_u {
+        uint32_t prev;              // previous index (random)
+        uint32_t* round_robin;      // array of previous index
+    } replace;
     cache_policy_t policy;  // cache replacement policy
     cache_mask_t maskInfo;  // masks for address translation
 };

@@ -2,6 +2,7 @@
  * icache.c
  */
 
+/********************************** includes **********************************/
 #include <stdlib.h>
 #include <string.h>
 
@@ -10,7 +11,16 @@
 
 #include "icache.h"
 
+
+/********************************** globals ***********************************/
 static cache_t icache;
+
+
+/******************************** definitions *********************************/
+
+// generates a pseudo-random 32-bit number, based on previous number in sequence
+// https://stackoverflow.com/a/52520577/12940429
+#define RANDOM_U32(prev) ((uint32_t)(prev * 48271U))
 
 
 /*
@@ -51,7 +61,15 @@ int icache_init(uint32_t cacheSize, uint32_t associativity, uint32_t blockSize,
     for (i = 0, rowOffset = 0; i < numRows; i++, rowOffset += rowBytes) {
         icache.table[i] = &data[rowOffset];
     }
-    // TODO: implement round-robin tracking stuff
+    // round-robin tracking array
+    if (policy == POLICY_ROUND_ROBIN) {
+        icache.replace.round_robin = malloc(sizeof(uint32_t) * numRows);
+        memset(icache.replace.round_robin, 0, sizeof(uint32_t) * numRows);
+    }
+
+    // init the cache struct counters to 0
+    icache.hits = 0;
+    icache.misses = 0;
 
     atexit(icache_cleanup);
 
@@ -79,8 +97,8 @@ void icache_cleanup(void) {
 void icache_stats(void) {
     g_autoptr(GString) out = g_string_new("");
     
-    g_string_printf(out, "icache hits: %ld\n", icache.hits);
-    g_string_append_printf(out, "icache misses: %ld\n", icache.misses);
+    g_string_printf(out, "icache hits: %10ld\n", icache.hits);
+    g_string_append_printf(out, "icache misses: %10ld\n", icache.misses);
 
     qemu_plugin_outs(out->str);
 }
@@ -91,14 +109,14 @@ void icache_stats(void) {
  */
 void icache_load(uint64_t vaddr) {
     // keep track of next victim
-    static uint32_t nextRowIdx = 0;
+    uint32_t nextRowIdx = 0;
 
     // convert 64-bit address
     aarch32_addr_t addr = (aarch32_addr_t) vaddr;
 
     // uint32_t blockOffsetBits = icache.maskInfo.blockOffsetMask & addr;
     uint32_t rowIdx = (addr >> icache.maskInfo.rowShift) & icache.maskInfo.rowMask;
-    // uint32_t tagBits = addr >> icache.maskInfo.tagShift;
+    uint32_t tagBits = addr >> icache.maskInfo.tagShift;
 
     // it might be in this row
     cache_entry_t* cacheRow = icache.table[rowIdx];
@@ -107,8 +125,8 @@ void icache_load(uint64_t vaddr) {
     int i;
     cache_result_t result = CACHE_RESULT_MISS;
     for (i = 0; i < icache.associativity; i+=1) {
-        // TODO: compare tag bits, not addresses
-        if ( (cacheRow[i].valid) && (cacheRow[i].addr == addr) ) {
+        // if valid and tag matches
+        if ( (cacheRow[i].valid) && (cacheRow[i].tag == tagBits) ) {
             result = CACHE_RESULT_HIT;
             break;
         }
@@ -122,7 +140,6 @@ void icache_load(uint64_t vaddr) {
 
     // otherwise, load the next address
     cache_entry_t* foundSpot = NULL;
-    // is it random or round-robin?
     // TODO: do something better than this
     // first look for invalid places to put it
     for (i = 0; i < icache.associativity; i+=1) {
@@ -133,10 +150,22 @@ void icache_load(uint64_t vaddr) {
     }
     // otherwise, get next victim
     if (foundSpot == NULL) {
-        foundSpot = &cacheRow[nextRowIdx];
-        nextRowIdx++;
-        if (nextRowIdx >= icache.associativity) {
-            nextRowIdx = 0;
+        // is it random or round-robin?
+        if (icache.policy == POLICY_RANDOM) {
+            // get a random spot
+            icache.replace.prev = RANDOM_U32(icache.replace.prev);
+            nextRowIdx = icache.replace.prev % icache.associativity;
+            foundSpot = &cacheRow[nextRowIdx];
+        } else {
+            // we remember using the struct
+            nextRowIdx = icache.replace.round_robin[rowIdx];
+            foundSpot = &cacheRow[nextRowIdx];
+            // update next spot
+            nextRowIdx++;
+            if (nextRowIdx >= icache.associativity) {
+                nextRowIdx = 0;
+            }
+            icache.replace.round_robin[rowIdx] = nextRowIdx;
         }
     }
 
@@ -145,7 +174,7 @@ void icache_load(uint64_t vaddr) {
 
     // update the memory spot
     foundSpot->valid = 1;
-    foundSpot->addr = addr;
+    foundSpot->tag = tagBits;
 
     // TODO: call L2 cache
 
