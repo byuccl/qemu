@@ -15,7 +15,7 @@ NAMES += hotblocks
 NAMES += howvec
 NAMES += hotpages
 NAMES += cache
-CACHE_SRCS := cache.o cache-common.o icache.o dcache.o l2cache.o
+CACHE_SRCS := cache.o cache-common.o icache.o dcache.o l2cache.o arm-disas.o
 
 SONAMES := $(addsuffix .so,$(addprefix lib,$(NAMES)))
 

@@ -89,3 +89,15 @@ void l2cache_store(uint64_t vaddr)
 
     return;
 }
+
+
+const cache_t* l2cache_get_ptr(void)
+{
+    return &l2cache;
+}
+
+
+arch_word_t l2cache_get_addr(uint64_t cacheRow, uint64_t cacheSet)
+{
+    return cache_get_addr_common(&l2cache, cacheRow, cacheSet);
+}

@@ -92,3 +92,30 @@ void dcache_store(uint64_t vaddr)
 
     return;
 }
+
+
+const cache_t* dcache_get_ptr(void)
+{
+    return &dcache;
+}
+
+
+arch_word_t dcache_get_addr(uint64_t cacheRow, uint64_t cacheSet)
+{
+    return cache_get_addr_common(&dcache, cacheRow, cacheSet);
+}
+
+void dcache_invalidate_block(int row, int block)
+{
+    cache_invalidate_block_common(&dcache, row, block);
+}
+
+int dcache_get_num_rows(void)
+{
+    return dcache.rows;
+}
+
+int dcache_get_assoc(void)
+{
+    return dcache.associativity;
+}

@@ -27,6 +27,8 @@ void l2cache_cleanup(void);
 void l2cache_stats(void);
 void l2cache_load(uint64_t vaddr);
 void l2cache_store(uint64_t vaddr);
+const cache_t* l2cache_get_ptr(void);
+arch_word_t l2cache_get_addr(uint64_t cacheRow, uint64_t cacheSet);
 
 
 #endif  /* __L2CACHE_H */

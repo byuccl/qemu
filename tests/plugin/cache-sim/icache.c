@@ -74,3 +74,18 @@ void icache_load(uint64_t vaddr) {
 
     return;
 }
+
+
+/*
+ * Request the address stored in a given row and column of the cache.
+ */
+arch_word_t icache_get_addr(uint64_t cacheRow, uint64_t cacheSet)
+{
+    return cache_get_addr_common(&icache, cacheRow, cacheSet);
+}
+
+
+const cache_t* icache_get_ptr(void)
+{
+    return &icache;
+}

@@ -199,3 +199,21 @@ cache_result_t cache_store_common(cache_t* cp, uint64_t vaddr)
 
     // Assume no write-allocate for now
 }
+
+
+/*
+ * It's the tag bits shifted over the correct amount,
+ *  with the bits that indicate the row OR'd with that,
+ *  which restores most of the address, besides the bits that
+ *  indicate the byte block offset.
+ */
+arch_word_t cache_get_addr_common(cache_t* cp, uint64_t cacheRow, uint64_t cacheSet)
+{
+    return (cp->table[cacheRow][cacheSet].tag << cp->maskInfo.tagShift) |
+            (cacheRow << cp->maskInfo.rowShift);
+}
+
+void cache_invalidate_block_common(cache_t* cp, int row, int block)
+{
+    cp->table[row][block].valid = 0;
+}

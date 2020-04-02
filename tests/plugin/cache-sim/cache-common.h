@@ -23,6 +23,8 @@ int init_cache_struct(cache_t* cp, uint32_t cacheSize,
 void free_cache_struct(cache_t* cp);
 cache_result_t cache_load_common(cache_t* cp, uint64_t vaddr);
 cache_result_t cache_store_common(cache_t* cp, uint64_t vaddr);
+arch_word_t cache_get_addr_common(cache_t* cp, uint64_t cacheRow, uint64_t cacheSet);
+void cache_invalidate_block_common(cache_t* cp, int row, int block);
 
 
 #endif  /* __CACHE_COMMON_H */
