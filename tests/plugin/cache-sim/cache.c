@@ -10,6 +10,8 @@
 #include <string.h>
 #include <unistd.h>
 #include <stdio.h>
+#include <time.h>
+
 #include <glib.h>
 
 #include <qemu-plugin.h>
@@ -19,6 +21,7 @@
 #include "dcache.h"
 #include "l2cache.h"
 #include "arm-disas.h"
+#include "sockets.h"
 
 // required export for it to build properly
 QEMU_PLUGIN_EXPORT int qemu_plugin_version = QEMU_PLUGIN_VERSION;
@@ -295,7 +298,7 @@ static void check_insn_count(unsigned int vcpu_index, void* userdata)
  *  cacheSet    - which set block
  *  cacheBit    - which bit in the block
  *                possible values: 0 -> ((blockSize * 8) - 1)
- *  cacheName   - which cache to inject into (NYI)
+ *  cacheName   - which cache to inject into
  *  doTag       - if the bit should be in the tag bits instead of data (NYI)
  */
 QEMU_PLUGIN_EXPORT int qemu_plugin_install(qemu_plugin_id_t id,
@@ -308,6 +311,12 @@ QEMU_PLUGIN_EXPORT int qemu_plugin_install(qemu_plugin_id_t id,
     // have to be 64 bit so can use stroul
     uint64_t cacheRow, cacheSet, cacheBit;
     char* cacheName;
+
+    // only allow ARM target
+    if (strcmp(info->target_name, "arm") != 0) {
+        qemu_plugin_outs("Architecture not supported!\n");
+        return !0;
+    }
 
     // allow all args or none
     uint32_t minArgs = 2;
@@ -410,8 +419,27 @@ QEMU_PLUGIN_EXPORT int qemu_plugin_install(qemu_plugin_id_t id,
         }
     }
 
-    // `info` argument has information about qemu system state
-    // see qemu_info_t in include/qemu/qemu-plugin.h for more details
+    // set up the socket for communication
+    if (sockets_init(12345)) {
+        qemu_plugin_outs("Error setting up socket!\n");
+        return !0;
+    }
+
+    const char* message = "Hello there!\r\n";
+    int result = sockets_send(message, strlen(message));
+    if (result) {
+        qemu_plugin_outs(sockets_get_err());
+        return !0;
+    }
+    qemu_plugin_outs("Sent hello message\n");
+    // get response
+    char* resp = sockets_recv();
+    if (resp == NULL) {
+        qemu_plugin_outs(sockets_get_err());
+        return !0;
+    }
+    qemu_plugin_outs(resp);
+    free(resp);
 
     // register the functions in this file
     qemu_plugin_register_vcpu_tb_trans_cb(id, put_cbs_in_tbs);
@@ -437,16 +465,18 @@ static void plugin_exit(qemu_plugin_id_t id, void* p) {
     // based on example in mem.c
     g_autoptr(GString) out = g_string_new("");
     
-    g_string_printf(out,        "insn count:           %10ld\n", insn_count);
-    g_string_append_printf(out, "load count:           %10ld\n", load_count);
-    g_string_append_printf(out, "store count:          %10ld\n", store_count);
-    g_string_append_printf(out, "cp count:             %10ld\n", cp_count);
+    // g_string_printf(out,        "insn count:           %10ld\n", insn_count);
+    // g_string_append_printf(out, "load count:           %10ld\n", load_count);
+    // g_string_append_printf(out, "store count:          %10ld\n", store_count);
+    // g_string_append_printf(out, "cp count:             %10ld\n", cp_count);
 
+    g_string_printf(out, " -- finished --\n");
     qemu_plugin_outs(out->str);
 
-    icache_stats();
-    dcache_stats();
-    l2cache_stats();
+    // icache_stats();
+    // dcache_stats();
+    // l2cache_stats();
+    sockets_exit();
 }
 
 /*
