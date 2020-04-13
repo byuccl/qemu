@@ -44,19 +44,19 @@ int read_len(uint32_t* len);
 
 
 /********************************* functions **********************************/
-int sockets_init(uint16_t hostport)
+int sockets_init(uint16_t hostport, char* hostname)
 {
     // connect the socket
     sockfd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (sockfd == -1) {
         return -1;
     }
-    sock_info.sin_addr.s_addr = inet_addr("127.0.0.1");
+    sock_info.sin_addr.s_addr = inet_addr(hostname);
     sock_info.sin_family = AF_INET;
     sock_info.sin_port = htons(hostport);
 
     if (connect(sockfd, &sock_info, sizeof(sock_info)) < 0) {
-        snprintf(errMsg, MAX_ERR_BUF_SIZE, "Error connecting to socket for sending!\n");
+        snprintf(errMsg, MAX_ERR_BUF_SIZE, "ERROR: connecting to socket for sending!\n");
         return -1;
     }
     int yes = 1;
@@ -73,7 +73,7 @@ int sockets_init(uint16_t hostport)
         // strerror_s(errmsg, errmsglen, errno);
         char* errno_msg = strerror(errno);
         snprintf(errMsg, MAX_ERR_BUF_SIZE, 
-                "Error changing socket properties!\n%s\n", errno_msg);
+                "ERROR: changing socket properties!\n%s\n", errno_msg);
         return -2;
     }
 
@@ -85,7 +85,7 @@ int sockets_exit(void)
     if (shutdown(sockfd, SHUT_RDWR)) {
         char* errno_msg = strerror(errno);
         snprintf(errMsg, MAX_ERR_BUF_SIZE, 
-                "Error shutting down socket connection!\n%s\n", errno_msg);
+                "ERROR: shutting down socket connection!\n%s\n", errno_msg);
         return -4;
     }
 
@@ -104,7 +104,7 @@ int send_raw(const void* data, size_t size)
     while (size > 0) {
         sent = send(sockfd, buffer, size, 0);
         if (sent < 0) {
-            snprintf(errMsg, MAX_ERR_BUF_SIZE, "Error sending message!\n");
+            snprintf(errMsg, MAX_ERR_BUF_SIZE, "ERROR: sending message!\n");
             return -1;
         }
         size -= sent;
@@ -139,7 +139,7 @@ int read_raw(void* data, size_t len)
         if (recvd < 0) {
             char* errno_msg = strerror(errno);
             snprintf(errMsg, MAX_ERR_BUF_SIZE, 
-                    "Error receiving message!\n%s\n", errno_msg);
+                    "ERROR: receiving message!\n%s\n", errno_msg);
             return -1;
         }
         if (recvd == 0) {
@@ -168,21 +168,21 @@ char* sockets_recv(void) {
     // we look for a header that is 4 bytes big, which says how big the
     //  rest of the data will be
     if (read_len(&len) <= 0) {
-        snprintf(errMsg, MAX_ERR_BUF_SIZE, "Error reading message length!\n");
+        snprintf(errMsg, MAX_ERR_BUF_SIZE, "ERROR: reading message length!\n");
         return NULL;
     }
 
     // allocate space for the incoming message
     char* ret = (char*) malloc(len+1);
     if (!ret) {
-        snprintf(errMsg, MAX_ERR_BUF_SIZE, "Error allocating memory for message!\n");
+        snprintf(errMsg, MAX_ERR_BUF_SIZE, "ERROR: allocating memory for message!\n");
         return NULL;
     }
 
     // read the incoming message
     if (read_raw(ret, len) <= 0) {
         free(ret);
-        snprintf(errMsg, MAX_ERR_BUF_SIZE, "Error reading message!\n");
+        snprintf(errMsg, MAX_ERR_BUF_SIZE, "ERROR: reading message!\n");
         return NULL;
     }
 

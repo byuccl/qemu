@@ -65,6 +65,9 @@ int init_cache_struct(cache_t* cp, uint32_t cacheSize,
     cp->store_hits = 0;
     cp->store_misses = 0;
 
+    // cache struct is now valid
+    cp->validFlag = 1;
+
     return 0;
 }
 
@@ -74,6 +77,8 @@ int init_cache_struct(cache_t* cp, uint32_t cacheSize,
  */
 void free_cache_struct(cache_t* cp)
 {
+    // no longer valid
+    cp->validFlag = 0;
     // free the big memory
     free(cp->table[0]);
     // free the row of pointers
@@ -91,6 +96,10 @@ void free_cache_struct(cache_t* cp)
  */
 cache_result_t cache_load_common(cache_t* cp, uint64_t vaddr)
 {
+    // make sure cache struct is still valid
+    if (!cp->validFlag)
+        return CACHE_RESULT_MISS;
+
     // keep track of next victim
     uint32_t nextRowIdx = 0;
 
@@ -169,6 +178,8 @@ cache_result_t cache_load_common(cache_t* cp, uint64_t vaddr)
  */
 cache_result_t cache_store_common(cache_t* cp, uint64_t vaddr)
 {
+    if (!cp->validFlag)
+        return CACHE_RESULT_MISS;
     // convert 64-bit address to be the size of word of the guest architecture
     arch_word_t addr = (arch_word_t) vaddr;
 
@@ -209,11 +220,15 @@ cache_result_t cache_store_common(cache_t* cp, uint64_t vaddr)
  */
 arch_word_t cache_get_addr_common(cache_t* cp, uint64_t cacheRow, uint64_t cacheSet)
 {
+    if (!cp->validFlag)
+        return 0;
     return (cp->table[cacheRow][cacheSet].tag << cp->maskInfo.tagShift) |
             (cacheRow << cp->maskInfo.rowShift);
 }
 
 void cache_invalidate_block_common(cache_t* cp, int row, int block)
 {
+    if (!cp->validFlag)
+        return;
     cp->table[row][block].valid = 0;
 }

@@ -16,7 +16,7 @@ struct injection_plan {
     uint64_t sleepCycles;
     uint64_t cacheRow;
     uint64_t cacheSet;
-    uint64_t cacheBit;
+    uint64_t cacheWord;
     cache_name_t cacheName;
 };
 typedef struct injection_plan injection_plan_t;

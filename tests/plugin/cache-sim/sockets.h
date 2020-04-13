@@ -7,7 +7,7 @@
 
 #include <stdint.h>
 
-int sockets_init(uint16_t hostport);
+int sockets_init(uint16_t hostport, char* hostname);
 int sockets_exit(void);
 int sockets_send(const void* buf, size_t len);
 char* sockets_recv(void);

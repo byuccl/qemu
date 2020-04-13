@@ -50,6 +50,7 @@ struct cache_stats {
     uint32_t rows;          // number of rows in the cache
     uint32_t associativity; // number of blocks in each row
     uint32_t blockSize;     // size of cache block (bytes)
+    uint32_t validFlag;     // is data structure valid
     union replace_u {
         uint32_t prev;              // previous index (random)
         uint32_t* round_robin;      // array of previous index
