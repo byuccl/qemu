@@ -51,6 +51,8 @@ static uint64_t insn_count = 0;
 static uint64_t load_count = 0;
 static uint64_t store_count = 0;
 static uint64_t cp_count = 0;
+static uint64_t tb_count = 0;
+static uint64_t uniq_insn_count = 0;
 static uint64_t textBegin = 0, textEnd = 0;     // begin and end addresses of .text
 
 #ifdef DEBUG_INSN_DISAS
@@ -92,6 +94,7 @@ static arch_word_t get_insn_bits(struct qemu_plugin_insn* insn) {
  * Based on code in insn.c, hotpages.c, and mem.c plugins
  */
 static void put_cbs_in_tbs(qemu_plugin_id_t id, struct qemu_plugin_tb* tb) {
+    tb_count += 1;
     // if it's the first time, and we want to inject a fault,
     //  look for data from the socket
     if (doInject) {
@@ -113,6 +116,7 @@ static void put_cbs_in_tbs(qemu_plugin_id_t id, struct qemu_plugin_tb* tb) {
 
     // iterate over each instruction and register a callback with it
     for (i = 0; i < n; i++) {
+        uniq_insn_count += 1;
         // get the handle for the instruction
         struct qemu_plugin_insn* insn = qemu_plugin_tb_get_insn(tb, i);
 
@@ -365,9 +369,6 @@ static void receive_injection_info(void)
         // return !0;
     }
     // TODO: socket return value for success or failure
-    g_autoptr(GString) out = g_string_new("");
-    g_string_printf(out, "INFO: Injecting into row %ld\n", plan.cacheRow);
-    qemu_plugin_outs(out->str);
 }
 
 
@@ -474,19 +475,22 @@ QEMU_PLUGIN_EXPORT int qemu_plugin_install(qemu_plugin_id_t id,
  */
 static void plugin_exit(qemu_plugin_id_t id, void* p) {
     // based on example in mem.c
-    // g_autoptr(GString) out = g_string_new("");
-    
-    // g_string_printf(out,        "insn count:           %10ld\n", insn_count);
-    // g_string_append_printf(out, "load count:           %10ld\n", load_count);
-    // g_string_append_printf(out, "store count:          %10ld\n", store_count);
-    // g_string_append_printf(out, "cp count:             %10ld\n", cp_count);
+    g_autoptr(GString) out = g_string_new("");
 
-    // g_string_printf(out, " -- finished --\n");
-    // qemu_plugin_outs(out->str);
+    if (plan.sleepCycles == 0) {
+        g_string_printf(out,        "INFO: insn count:           %10ld\n", insn_count);
+        g_string_append_printf(out, "INFO: load count:           %10ld\n", load_count);
+        g_string_append_printf(out, "INFO: store count:          %10ld\n", store_count);
+        g_string_append_printf(out, "INFO: cp count:             %10ld\n", cp_count);
+        g_string_append_printf(out, "INFO: tb count:             %10ld\n", tb_count);
+        g_string_append_printf(out, "INFO: unique insns:         %10ld\n", uniq_insn_count);
+        qemu_plugin_outs(out->str);
 
-    // icache_stats();
-    // dcache_stats();
-    // l2cache_stats();
+        // if there was no injection, report the number of cycles
+        g_string_printf(out, "0x%08lX\n", insn_count);
+        sockets_send(out->str, out->len);
+    }
+
     sockets_exit();
 }
 
