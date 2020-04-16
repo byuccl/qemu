@@ -54,6 +54,7 @@ static uint64_t cp_count = 0;
 static uint64_t tb_count = 0;
 static uint64_t uniq_insn_count = 0;
 static uint64_t textBegin = 0, textEnd = 0;     // begin and end addresses of .text
+static uint64_t mainBegin = 0;
 
 #ifdef DEBUG_INSN_DISAS
 char lastInsnStr[LAST_INSN_BUF_SIZE];
@@ -92,23 +93,37 @@ static arch_word_t get_insn_bits(struct qemu_plugin_insn* insn) {
 /*
  * Will register a callback with each instruction executed
  * Based on code in insn.c, hotpages.c, and mem.c plugins
+ * sleepCycles - the number of cycles to wait before injecting a fault
  */
 static void put_cbs_in_tbs(qemu_plugin_id_t id, struct qemu_plugin_tb* tb) {
-    tb_count += 1;
-    // if it's the first time, and we want to inject a fault,
-    //  look for data from the socket
-    if (doInject) {
-        doInject = 0;   // reset
-        // get sleep cycles only here
-        char* argStr;
-        argStr = sockets_recv();
-        plan.sleepCycles = strtoul(argStr, NULL, 10);
-        free(argStr);
-        g_autoptr(GString) out = g_string_new("");
-        // to get it to print
-        g_string_printf(out, "INFO: Sleeping for %ld cycles\n", plan.sleepCycles);
-        qemu_plugin_outs(out->str);
+    // do stuff the first time
+    if (!tb_count) {
+        // look for data from the socket
+        if (!tb_count && doInject) {
+            // get sleep cycles only here
+            char* argStr;
+            argStr = sockets_recv();
+            plan.sleepCycles = strtoul(argStr, NULL, 10);
+            free(argStr);
+            g_autoptr(GString) out = g_string_new("");
+            // to get it to print
+            g_string_printf(out, "INFO: Sleeping for %ld cycles\n", plan.sleepCycles);
+            qemu_plugin_outs(out->str);
+        } else {
+            // ask for what the address of main() is so we can tell how many
+            //  cycles it takes to get there
+            char* argStr;
+            argStr = sockets_recv();
+            mainBegin = strtoul(argStr, NULL, 10);
+            free(argStr);
+            g_autoptr(GString) out = g_string_new("");
+            // to get it to print
+            g_string_printf(out, "INFO: main() starts at 0x%lX\n", mainBegin);
+            qemu_plugin_outs(out->str);
+        }
     }
+    // number of unique tb's
+    tb_count += 1;
 
     // get the number of instructions in this tb
     size_t n = qemu_plugin_tb_n_insns(tb);
@@ -183,9 +198,20 @@ static void put_cbs_in_tbs(qemu_plugin_id_t id, struct qemu_plugin_tb* tb) {
  */
 static void parse_instruction(unsigned int vcpu_index, void* userdata)
 {
+    uint64_t vaddr = (uint64_t)userdata;
     insn_count += 1;
-    icache_load((uint64_t)userdata);
+    icache_load(vaddr);
     check_insn_count();
+
+    // see if we've hit main
+    if ( (!doInject) && (vaddr >= mainBegin) )
+    {
+        g_autoptr(GString) out = g_string_new("");
+        g_string_printf(out, "0x%08lX", insn_count);
+        sockets_send(out->str, out->len);
+        // reset mainBegin to be max int
+        mainBegin = UINT64_MAX;
+    }
 }
 
 
@@ -307,7 +333,6 @@ static void check_insn_count(void)
 
 /*
  *  Arguments (from the socket):
- *  sleepCycles - the number of cycles to wait before injecting a fault
  *  cacheRow    - the row in the cache to inject fault
  *  cacheSet    - which set block
  *  cacheBit    - which bit in the block
