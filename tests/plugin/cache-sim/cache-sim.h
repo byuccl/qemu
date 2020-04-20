@@ -26,7 +26,7 @@ typedef enum cache_result_e cache_result_t;
 // create a type for a cache entry
 struct cache_entry {
     arch_word_t tag;
-    uint8_t valid;
+    uint8_t dirty;
 };
 typedef struct cache_entry cache_entry_t;
 

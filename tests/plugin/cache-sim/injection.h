@@ -1,3 +1,6 @@
+#ifndef __INJECTION_H
+#define __INJECTION_H
+
 /*
  * injection.h
  * 
@@ -20,3 +23,6 @@ struct injection_plan {
     cache_name_t cacheName;
 };
 typedef struct injection_plan injection_plan_t;
+
+
+#endif  /* __INJECTION_H */

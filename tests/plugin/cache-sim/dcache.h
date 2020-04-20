@@ -31,7 +31,9 @@ const cache_t* dcache_get_ptr(void);
 arch_word_t dcache_get_addr(uint64_t cacheRow, uint64_t cacheSet);
 int dcache_get_num_rows(void);
 int dcache_get_assoc(void);
+uint8_t dcache_block_valid(int row, int block);
 void dcache_invalidate_block(int row, int block);
+int dcache_validate_injection(injection_plan_t* plan);
 
 
 #endif  /* __DCACHE_H */

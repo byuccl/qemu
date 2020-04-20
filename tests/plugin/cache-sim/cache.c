@@ -44,6 +44,8 @@ static void check_insn_count(void);
 static void plugin_exit(qemu_plugin_id_t id, void* p);
 static void put_cbs_in_tbs(qemu_plugin_id_t id, struct qemu_plugin_tb* tb);
 static void receive_injection_info(void);
+// helpers
+void get_socket_args(void);
 
 
 /********************************** globals ***********************************/
@@ -324,12 +326,39 @@ static void check_insn_count(void)
         g_string_printf(out, "0x%08lX", insn_count);
         sockets_send(out->str, out->len);
         // send the data
-        // g_autoptr(GString) out = g_string_new("");
         g_string_printf(out, "0x%08X", addr);
         sockets_send(out->str, out->len);
+
+        // TODO: socket return value for success or failure
     }
 }
 
+
+/****************************** argument helpers ******************************/
+void get_socket_args(void)
+{
+    // where in the cache - row and set
+    char* argStr = sockets_recv();
+    plan.cacheRow = strtoul(argStr, NULL, 10);
+    free(argStr);
+    argStr = sockets_recv();
+    plan.cacheSet = strtoul(argStr, NULL, 10);
+    free(argStr);
+
+    char* cacheName = sockets_recv();
+    // decode the cache name
+    if (memcmp(cacheName, "icache", 6) == 0) {
+        plan.cacheName = ICACHE;
+    } else if (memcmp(cacheName, "dcache", 6) == 0) {
+        plan.cacheName = DCACHE;
+    } else if (memcmp(cacheName, "l2cache", 7) == 0) {
+        plan.cacheName = L2CACHE;
+    } else {
+        qemu_plugin_outs("ERROR: Invalid cache name!\n");
+        // return !0;
+    }
+    free(cacheName);
+}
 
 /*
  *  Arguments (from the socket):
@@ -345,55 +374,58 @@ static void receive_injection_info(void)
     qemu_plugin_outs("INFO: Waiting for socket args\n");
 
     // where in the cache
-    char* argStr = sockets_recv();
-    plan.cacheRow = strtoul(argStr, NULL, 10);
-    free(argStr);
-    argStr = sockets_recv();
-    plan.cacheSet = strtoul(argStr, NULL, 10);
-    free(argStr);
-    argStr = sockets_recv();
-    plan.cacheWord = strtoul(argStr, NULL, 10);
-    free(argStr);
-    char* cacheName = sockets_recv();
-
-    // decode the cache name
-    if (memcmp(cacheName, "icache", 6) == 0) {
-        plan.cacheName = ICACHE;
-    } else if (memcmp(cacheName, "dcache", 6) == 0) {
-        plan.cacheName = DCACHE;
-    } else if (memcmp(cacheName, "l2cache", 7) == 0) {
-        plan.cacheName = L2CACHE;
-    } else {
-        qemu_plugin_outs("ERROR: Invalid cache name!\n");
-        // return !0;
-    }
-    free(cacheName);
-
-    // validate the injection parameters
-    // NOTE: no checking is done on the cycle count: if that doesn't happen
-    //  before the program exits, that is the user's problem
-    // TODO: do this without an explicit reference to the struct
-    const cache_t* cp;
+    get_socket_args();
+    // verify those are valid parameters
+    int invalid = 1;
     switch (plan.cacheName) {
         case ICACHE:
-            cp = icache_get_ptr();
+            invalid = icache_validate_injection(&plan);
             break;
         case DCACHE:
-            cp = dcache_get_ptr();
+            invalid = dcache_validate_injection(&plan);
             break;
         case L2CACHE:
-            cp = l2cache_get_ptr();
+            invalid = l2cache_validate_injection(&plan);
             break;
+        default:
+            invalid = 1;
     }
-
-    if ( (plan.cacheRow > cp->rows-1) ||
-            (plan.cacheSet > cp->associativity-1) ||
-            (plan.cacheWord > (cp->blockSize * sizeof(arch_word_t))-1) )
-    {
+    if (invalid) {
         qemu_plugin_outs("ERROR: Invalid injection parameters!\n");
         // return !0;
     }
-    // TODO: socket return value for success or failure
+
+    // see if the line is valid
+    uint8_t valid = 0;
+    switch (plan.cacheName) {
+        case ICACHE:
+            valid = icache_block_valid(plan.cacheRow, plan.cacheSet);
+            break;
+        case DCACHE:
+            valid = dcache_block_valid(plan.cacheRow, plan.cacheSet);
+            break;
+        case L2CACHE:
+            valid = l2cache_block_valid(plan.cacheRow, plan.cacheSet);
+            break;
+        default:
+            valid = 0;
+            break;
+    }
+
+    // send valid-ness back to the supervisor
+    g_autoptr(GString) out = g_string_new("");
+    g_string_printf(out, "%hhu\n", valid);    // unsigned char
+    sockets_send(out->str, out->len);
+    // some discussion about waiting for a valid block, but that is not realistic
+    //   of radiation tests, even if it takes longer
+
+    // then get the block
+    char* argStr = sockets_recv();
+    plan.cacheWord = strtoul(argStr, NULL, 10);
+    free(argStr);
+
+    // NOTE: no checking is done on the cycle count: if that doesn't happen
+    //  before the program exits, that is the user's problem
 }
 
 
