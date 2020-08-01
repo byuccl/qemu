@@ -14,8 +14,7 @@ NAMES += mem
 NAMES += hotblocks
 NAMES += howvec
 NAMES += hotpages
-NAMES += cache
-CACHE_SRCS := cache.o cache-common.o icache.o dcache.o l2cache.o arm-disas.o sockets.o
+NAMES += profile
 
 SONAMES := $(addsuffix .so,$(addprefix lib,$(NAMES)))
 
@@ -23,9 +22,6 @@ QEMU_CFLAGS += -fPIC
 QEMU_CFLAGS += -I$(SRC_PATH)/include/qemu
 
 all: $(SONAMES)
-
-libcache.so: $(CACHE_SRCS)
-	$(CC) -shared -Wl,-soname,$@ -o $@ $^ $(LDLIBS)
 
 lib%.so: %.o
 	$(CC) -shared -Wl,-soname,$@ -o $@ $^ $(LDLIBS)
