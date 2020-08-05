@@ -18,6 +18,7 @@
 
 /********************************** includes **********************************/
 #include <stdio.h>
+#include <string.h>
 #include <fcntl.h>
 #include <unistd.h>
 
@@ -104,15 +105,22 @@ static void plugin_exit(qemu_plugin_id_t id, void* p) {
 /*
  * Opens the input file and reads the data into the map.
  * Assumes lines are of the format
- *  functionName - start, end
- * Where 'start' and 'end' are 0x0000000
+ *  functionName - start; end
+ * Where 'start' and 'end' are decimal integers
+ *
+ * Example:
+ * main - 1049780; 1049940
+ * abort - 1050100
+ * Xil_L1ICacheEnable - 1056348; 1056356, 1056376
  */
 static void read_input_file(const char* filePath) {
     // open the file
     inputFile = fopen(filePath, "r");
 
     // variables for reading in values
-    int start, end;
+    uint64_t start, end;
+    size_t curLen;
+    int numRead, numRead2 = 0;
     int status = 0;
     int numEntries = 0;
     char inputBuffer[INPUT_BUF_SIZE];
@@ -124,20 +132,48 @@ static void read_input_file(const char* filePath) {
     while (fgets(inputBuffer, INPUT_BUF_SIZE, inputFile)) {
         // qemu_plugin_outs(inputBuffer);
         // parse the line
-        // example - vfiprintf: 0x10aa6c, 0x10aa86
-        status = sscanf(inputBuffer, "%s - 0x%x, 0x%x", funcNameBuf, &start, &end);
-        if (status == 3) {
-            // fprintf(outputFile, "%s goes from %#x to %#x\n", funcNameBuf, start, end);
-            // put in hash table
-            g_string_printf(out, "-> %s", funcNameBuf);
-            g_hash_table_insert(funcMap, GINT_TO_POINTER(start), g_strdup(out->str));
-
-            // same thing for the end address
-            // g_string_printf(out, "<- %s", funcNameBuf);
-            // g_hash_table_insert(funcMap, GINT_TO_POINTER(end), g_strdup(out->str));
-
+        status = sscanf(inputBuffer, "%s - %lu%n", funcNameBuf, &start, &numRead);
+        if (status == 2) {
             // track how many functions we're looking for
             numEntries += 1;
+            curLen = strlen(inputBuffer);
+            // reset
+            numRead2 = 0;
+
+            // fprintf(outputFile, "%s starts at %#lx\n", funcNameBuf, start);
+            // g_string_printf(out, "\nrest of string: %s", inputBuffer+numRead);
+            // qemu_plugin_outs(out->str);
+
+            // see if (and how many) end points specified
+            if (numRead+1 == curLen) {
+                // put in hash table, with notation
+                g_string_printf(out, "-*> %s", funcNameBuf);
+                g_hash_table_insert(funcMap, GINT_TO_POINTER(start), g_strdup(out->str));
+                // qemu_plugin_outs(out->str);
+            } else {
+                // we can figure out the rest of the data
+                g_string_printf(out, "-> %s", funcNameBuf);
+                g_hash_table_insert(funcMap, GINT_TO_POINTER(start), g_strdup(out->str));
+                // qemu_plugin_outs(out->str);
+
+                do {
+                    // increment char pointer
+                    numRead += numRead2;
+                    numRead += 2;
+                    if ( (numRead > INPUT_BUF_SIZE) || (numRead > curLen) ) {
+                        break;
+                    }
+
+                    // g_string_printf(out, "%s", inputBuffer+numRead);
+                    // qemu_plugin_outs(out->str);
+                    // read next token
+                    status = sscanf(inputBuffer+numRead, "%lu%n", &end, &numRead2);
+                    // add to map
+                    g_string_printf(out, "<- %s", funcNameBuf);
+                    g_hash_table_insert(funcMap, GINT_TO_POINTER(end), g_strdup(out->str));
+                    // qemu_plugin_outs(out->str);
+                } while (status == 1);
+            }
         }
     }
 
@@ -181,3 +217,20 @@ static void print_insn_hit(unsigned int vcpu_index, void* userdata) {
     // print with cycle count
     fprintf(outputFile, "%s: %lu\n", hitMsg, cycleCount);
 }
+
+
+/*
+ * Related work:
+ *
+ * https://github.com/guillon/run-qemu-profile
+ * out of date (2014)
+ * 
+ * Peter Maydell says it's not built in, but a plugin could do it
+ * https://stackoverflow.com/questions/58766571/how-to-count-the-number-of-guest-instructions-qemu-executed-from-the-beginning-t
+ *
+ * My own question shows up on SO
+ * https://stackoverflow.com/questions/60821772/qemu-plugin-functions-how-to-access-guest-memory-and-registers
+ *
+ * Interrupt-based method for QEMU
+ * http://torokerneleng.blogspot.com/2019/07/qprofiler-profiler-for-guests-in-qemukvm.html
+ */
