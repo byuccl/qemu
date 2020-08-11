@@ -33,6 +33,15 @@ QEMU_PLUGIN_EXPORT int qemu_plugin_version = QEMU_PLUGIN_VERSION;
 /******************************** Definitions *********************************/
 #define INPUT_BUF_SIZE 128
 #define FUNC_NAME_SIZE 64
+// hack
+#define SIZE_OF_CPUState 33480
+#define SIZE_OF_CPUNegativeOffsetState 3632
+// thanks - https://stackoverflow.com/a/53884709/12940429
+#define CPU_STRUCT_OFFSET (SIZE_OF_CPUState + SIZE_OF_CPUNegativeOffsetState + 8)
+// investigation with GDB shows that the above calculation is off by 8 bytes
+
+// check FreeRTOSConfig.h, but default is 16
+#define MAX_TASK_NAME_LEN 16
 
 
 /**************************** function prototypes *****************************/
@@ -40,6 +49,12 @@ static void plugin_exit(qemu_plugin_id_t id, void* p);
 static void read_input_file(const char* filePath);
 static void on_tb_translate(qemu_plugin_id_t id, struct qemu_plugin_tb* tb);
 static void print_insn_hit(unsigned int vcpu_index, void* userdata);
+static void print_context_switch(unsigned int vcpu_index, void* userdata);
+// hack - https://stackoverflow.com/a/61977875/12940429
+void *qemu_get_cpu(int index);
+static uint32_t get_cpu_register(unsigned int cpu_index, unsigned int reg);
+extern void cpu_physical_memory_rw(uint64_t addr, uint8_t *buf,
+                                    uint64_t len, int is_write);
 
 
 /********************************** globals ***********************************/
@@ -47,9 +62,17 @@ static FILE* inputFile;
 static FILE* outputFile;
 static GHashTable* funcMap;
 static uint64_t cycleCount = 0;
+static uint64_t curTCBaddr = 0;
+static char taskNameBuf[MAX_TASK_NAME_LEN];
 
 
 /********************************* functions **********************************/
+
+static uint32_t get_cpu_register(unsigned int cpu_index, unsigned int reg) {
+    uint8_t* cpu = qemu_get_cpu(cpu_index);
+    return *(uint32_t*)( cpu + CPU_STRUCT_OFFSET + (reg * 4) );
+}
+
 
 /*
  * Register the plugin.
@@ -140,6 +163,13 @@ static void read_input_file(const char* filePath) {
             // reset
             numRead2 = 0;
 
+            // special case
+            if (strcmp(funcNameBuf, "pxCurrentTCB") == 0) {
+                curTCBaddr = start;
+                numEntries -= 1;
+                continue;
+            }
+
             // fprintf(outputFile, "%s starts at %#lx\n", funcNameBuf, start);
             // g_string_printf(out, "\nrest of string: %s", inputBuffer+numRead);
             // qemu_plugin_outs(out->str);
@@ -200,7 +230,12 @@ static void on_tb_translate(qemu_plugin_id_t id, struct qemu_plugin_tb* tb) {
         if (val != NULL) {
             // register a printing callback
             qemu_plugin_register_vcpu_insn_exec_cb(
-                    insn, print_insn_hit, QEMU_PLUGIN_CB_NO_REGS, val);
+                    insn, print_insn_hit, QEMU_PLUGIN_CB_R_REGS, val);
+            // special case
+            if (memcmp(val, "<- vTaskSwitchContext", 19) == 0) {
+                qemu_plugin_register_vcpu_insn_exec_cb(
+                        insn, print_context_switch, QEMU_PLUGIN_CB_NO_REGS, NULL);
+            }
         }
 
         // all instructions will increment the global cycle counter
@@ -214,8 +249,38 @@ static void print_insn_hit(unsigned int vcpu_index, void* userdata) {
     // cast
     char* hitMsg = (char*)userdata;
 
-    // print with cycle count
-    fprintf(outputFile, "%s: %lu\n", hitMsg, cycleCount);
+    // get the calling function
+    uint32_t read_lr = get_cpu_register(vcpu_index, 1);
+
+    // print with cycle count and return address
+    // probably will have to use addr2line to figure out which function that came from
+    fprintf(outputFile, "%s: %lu, %#x\n", hitMsg, cycleCount, read_lr);
+
+    return;
+}
+
+
+static void print_context_switch(unsigned int vcpu_index, void* userdata) {
+    // read the value of pxCurrentTCB
+    uint32_t pxCurrentTCBval;
+    cpu_physical_memory_rw(curTCBaddr, (uint8_t*) &pxCurrentTCBval, sizeof(pxCurrentTCBval), 0);
+
+    // compute offset - ran GDB to figure it out
+    uint32_t pxCurrentTCBname = pxCurrentTCBval + 0x34;
+
+    // read the name from that address
+    cpu_physical_memory_rw(pxCurrentTCBname, (uint8_t*) taskNameBuf, MAX_TASK_NAME_LEN, 0);
+
+    // print result to log file
+    fprintf(outputFile, "~ switch to %s\n", taskNameBuf);
+
+    /*
+     * Another way to uniquely identify tasks is using uxTCBNumber, in case
+     *  there are duplicate task names. Though duplicate task names would mess
+     *  with xTaskGetHandle() working, so it might not be a problem.
+     * If you want to use uxTCBNumber, it's (pxCurrentTCB + 0x34 +
+     *  sizeof(pxCurrentTCB->pcTaskName)).
+     */
 }
 
 
