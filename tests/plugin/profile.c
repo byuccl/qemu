@@ -272,7 +272,7 @@ static void print_context_switch(unsigned int vcpu_index, void* userdata) {
     cpu_physical_memory_rw(pxCurrentTCBname, (uint8_t*) taskNameBuf, MAX_TASK_NAME_LEN, 0);
 
     // print result to log file
-    fprintf(outputFile, "~ switch to %s\n", taskNameBuf);
+    fprintf(outputFile, "~ switch to %s, %lu\n", taskNameBuf, cycleCount);
 
     /*
      * Another way to uniquely identify tasks is using uxTCBNumber, in case
