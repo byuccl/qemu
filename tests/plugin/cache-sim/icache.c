@@ -89,3 +89,43 @@ const cache_t* icache_get_ptr(void)
 {
     return &icache;
 }
+
+
+/*
+ * Reset the entirety of the icache.
+ */
+void icache_invalidate_all(void)
+{
+    int row, way;
+    for (row = icache.rows-1; row >= 0; row--)
+    {
+        for (way = icache.associativity-1; way >= 0; way--)
+        {
+            cache_invalidate_block_common(&icache, row, way);
+        }
+    }
+}
+
+
+/* check for specific opcode setup
+ * MCR<c> <coproc>, <opc1>, <Rt>, <CRn>, <CRm>{, <opc2>}
+ * mcr	   p15,      0,      r0,   c7,    c5,     0
+ * Executes the "ICIALLU" pseudo-instruction
+ * https://developer.arm.com/docs/ddi0595/h/aarch32-system-instructions/iciallu
+ */
+int icache_is_cache_inst(insn_op_t* insn_op_data)
+{
+    if (
+        (insn_op_data->bitfield.coproc == 0xE) &&
+        (insn_op_data->bitfield.type == 0x0) &&
+        (insn_op_data->bitfield.Rn == 0x7) &&
+        (insn_op_data->bitfield.Rm == 0x5) &&
+        (insn_op_data->bitfield.Rt2 == 0x0)
+    ) {
+        return true;
+    }
+    else
+    {
+        return false;
+    }
+}

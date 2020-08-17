@@ -31,15 +31,25 @@ QEMU_PLUGIN_EXPORT int qemu_plugin_version = QEMU_PLUGIN_VERSION;
 #define LAST_INSN_BUF_SIZE 64
 #endif
 
+// hack - get register values
+#define SIZE_OF_CPUState 33480
+#define SIZE_OF_CPUNegativeOffsetState 3632
+// thanks - https://stackoverflow.com/a/53884709/12940429
+#define CPU_STRUCT_OFFSET (SIZE_OF_CPUState + SIZE_OF_CPUNegativeOffsetState + 8)
+
 
 /**************************** function prototypes *****************************/
 static void parse_instruction(unsigned int vcpu_index, void* userdata);
 static void parse_mem(unsigned int vcpu_index, qemu_plugin_meminfo_t info,
                         uint64_t vaddr, void* userdata);
 static void cache_inst(unsigned int vcpu_index, void* userdata);
-static void check_insn_count(unsigned int vcpu_index, void* userdata);
+static void icache_inst(unsigned int vcpu_index, void* userdata);
 static void plugin_exit(qemu_plugin_id_t id, void* p);
 static void put_cbs_in_tbs(qemu_plugin_id_t id, struct qemu_plugin_tb* tb);
+
+// hack - https://stackoverflow.com/a/61977875/12940429
+void *qemu_get_cpu(int index);
+static uint32_t get_cpu_register(unsigned int cpu_index, unsigned int reg);
 
 
 /********************************** globals ***********************************/
@@ -53,11 +63,28 @@ static uint64_t textBegin = 0, textEnd = 0;     // begin and end addresses of .t
 char lastInsnStr[LAST_INSN_BUF_SIZE];
 #endif
 
-static injection_plan_t plan;
-static uint32_t faultDone = 0;
+
+/************************* Cache Control Instructions *************************/
+static const uint32_t COPROC_RT_BITS = CREATE_BIT_MASK(4) << 12;
+static const uint32_t WAY_BITS = CREATE_BIT_MASK(2) << 30;
+static const uint32_t SET_BITS = CREATE_BIT_MASK(10) << 4;
+
+#define GET_COPROC_RT_BITS(bits)    ((bits & COPROC_RT_BITS) >> 12)
+#define GET_WAY_BITS(bits)          ((bits & WAY_BITS) >> 30)
+#define GET_SET_BITS(bits)          ((bits & SET_BITS) >> 4)
 
 
 /********************************* functions **********************************/
+
+/*
+ * Get the value of a register in the current CPU state.
+ * This function is a hack and not officially supported by the plugin interface.
+ */
+static uint32_t get_cpu_register(unsigned int cpu_index, unsigned int reg) {
+    uint8_t* cpu = qemu_get_cpu(cpu_index);
+    return *(uint32_t*)( cpu + CPU_STRUCT_OFFSET + (reg * 4) );
+}
+
 
 /* 
  * get the encoded bits as a single word of arch size
@@ -87,14 +114,6 @@ static arch_word_t get_insn_bits(struct qemu_plugin_insn* insn) {
  * Based on code in insn.c, hotpages.c, and mem.c plugins
  */
 static void put_cbs_in_tbs(qemu_plugin_id_t id, struct qemu_plugin_tb* tb) {
-    // we can disable this from the plugin init
-    if (!faultDone)
-    {
-        // on the translation of each tb, put a callback to check cycle count
-        qemu_plugin_register_vcpu_tb_exec_cb(tb, check_insn_count,
-                                            QEMU_PLUGIN_CB_NO_REGS,     // TODO: RW for
-                                            (void*)NULL);               //  injection?
-    }
 
     // get the number of instructions in this tb
     size_t n = qemu_plugin_tb_n_insns(tb);
@@ -134,29 +153,23 @@ static void put_cbs_in_tbs(qemu_plugin_id_t id, struct qemu_plugin_tb* tb) {
         insn_op_t insn_op_data;
         cp_load_store_e cp_type = INSN_IS_COPROC_LOAD_STORE(&insn_op_data, insn_bits);
         if (cp_type >= CP_REG_TYPE_BASE) {
-            /* check for specific opcode setup
-             * MCR<c> <coproc>, <opc1>, <Rt>, <CRn>, <CRm>{, <opc2>}
-             * mcr     p15,      0,      r11,  c7,    c6,     2
-             * Rt - SetWay, bits [31:4]; Level, bits [3:1]; bit 0 reserved
-             * A = log2(ASSOCIATIVITY)          (=2)
-             * L = log2(LINELEN)                (=5)
-             * S = log2(NSETS)                  (=8)
-             * B = (L + S)                      (=13)
-             * Way, bits[31:32-A] - the number of the way to operate on
-             * Set, bits[B-1:L]   - the number of the set to operate on
-             */
-            // TODO: put this in a function
-            if ( (cp_type == CP_MCR) &&
-                 (insn_op_data.bitfield.coproc == 0xE) &&
-                 (insn_op_data.bitfield.type == 0x0) &&
-                 (insn_op_data.bitfield.Rn == 0x7) &&
-                 (insn_op_data.bitfield.Rm == 0x6) &&
-                 (insn_op_data.bitfield.Rt2 == 0x2)
-               )
+
+            if ( cp_type == CP_MCR )
             {
-                qemu_plugin_register_vcpu_insn_exec_cb(insn, cache_inst,
-                                            QEMU_PLUGIN_CB_NO_REGS,
-                                            NULL);
+                // controlling dcache?
+                if (dcache_is_cache_inst(&insn_op_data))
+                {
+                    qemu_plugin_register_vcpu_insn_exec_cb(insn, cache_inst,
+                                                QEMU_PLUGIN_CB_R_REGS,
+                                                (void*) (uint64_t) insn_bits);
+                    // have to cast to large enough int type before cast to pointer
+                }
+                // controlling icache?
+                else if (icache_is_cache_inst(&insn_op_data))
+                {
+                    qemu_plugin_register_vcpu_insn_exec_cb(insn, icache_inst,
+                                                QEMU_PLUGIN_CB_NO_REGS, NULL);
+                }
             }
         }
     }
@@ -209,80 +222,64 @@ static void parse_mem(unsigned int vcpu_index, qemu_plugin_meminfo_t info,
 /*
  * Execute an instruction which changes the state of the cache.
  * We have to change the state of the in-memory model of the cache.
+ * Looking for something like this:
+ *    mcr	p15, 0, r11, c7, c6, 2
+ * https://github.com/Xilinx/embeddedsw/blob/a60c084a0862559e2fa58fd4c82b0fe39b923e33/lib/bsp/standalone/src/arm/cortexa9/gcc/boot.S#L448
+ *
+ * Executes the "DCISW" pseudo-instruction
+ * https://developer.arm.com/docs/ddi0601/f/aarch32-system-instructions/dcisw
+ * SetWay, bits [31:4]; Level, bits [3:1], Bit [0] reserved
+ * Way, bits[31:32-A], the number of the way to operate on.
+ * Set, bits[B-1:L], the number of the set to operate on.
+ * So Way is bits [31:30] (because A = log_2(Associativity) = log_2(4) = 2)
+ * L = log_2(LINELEN) = log_2(32) = 5
+ * S = log_2(NSETS) = log_2(32k/32/4) = log_2(512) = 9
+ * B = (L+S) = 5+9 = 14
+ * And Set is bits [13:4]
  */
 static void cache_inst(unsigned int vcpu_index, void* userdata)
 {
-    static int working_cache_set = -1;
-    static int working_cache_way = -1;
 
-    // TODO: we need to decode the register value somehow
-    // uint32_t cacheLine = (uint32_t) userdata;
-    // for the present, simulate it because we know the sequence
-    // also, the ARM docs use different terminology than I do
-    if (working_cache_set < 0) {
-        working_cache_set = dcache_get_num_rows() - 1;
-        working_cache_way = dcache_get_assoc() - 1;
-    }
+    // Pass the instruction bits in literally
+    arch_word_t insn_bits = (uint64_t) userdata;
+
+    // The register being read from are bits 12-15
+    // See arm-disas.c:INSN_IS_COPROC_LOAD_STORE for more information
+    unsigned int regIdx = (unsigned int) GET_COPROC_RT_BITS(insn_bits);
+    // Read the register
+    uint32_t readRt = get_cpu_register(vcpu_index, regIdx);
+    int readSet = GET_SET_BITS(readRt);
+    int readWay = GET_WAY_BITS(readRt);
+
+    // ARM "set" == my "row"
+    // ARM "way" == my "way"
+
+    // debug printing
+    /* g_autoptr(GString) out = g_string_new("");
+     * g_string_printf(out, "cycle: %lu, Rt: 0x%08x\n", insn_count, readRt);
+     * g_string_append_printf(out, "  set: %#x, way: %#x\n", readSet, readWay);
+     * qemu_plugin_outs(out->str);
+     */
 
     // invalidate a specific cache row and block
-    dcache_invalidate_block(working_cache_set, working_cache_way);
-    working_cache_set -= 1;
-    working_cache_way -= 1;
-    if (working_cache_way < 0) {
-        working_cache_way = dcache_get_assoc() - 1;
-    }
+    dcache_invalidate_block(readSet, readWay);
 
     cp_count += 1;
 }
 
 
 /*
- * Function is called every time a tb is executed.
- * This is the stub for where fault injection will be performed.
- * TODO: this could be moved to be inside the other callbacks, to give a 
- *  more fine-grained cycle count, but at the cost of longer emulation time.
+ * There is a single instruction that invalides the entire icache
+ * https://github.com/Xilinx/embeddedsw/blob/a60c084a0862559e2fa58fd4c82b0fe39b923e33/lib/bsp/standalone/src/arm/cortexa9/gcc/boot.S#L224
+ *    mcr	p15, 0, r0, c7, c5, 0
+ * Executes the "ICIALLU" pseudo-instruction
+ * https://developer.arm.com/docs/ddi0595/h/aarch32-system-instructions/iciallu
+ * Don't even need to read the register.
  */
-static void check_insn_count(unsigned int vcpu_index, void* userdata)
+static void icache_inst(unsigned int vcpu_index, void* userdata)
 {
-    // see if it's time to inject the fault
-    if ( (!faultDone) && (insn_count >= plan.sleepCycles) )
-    {
-        faultDone = 1;
-
-        g_autoptr(GString) out = g_string_new("");
-        g_string_printf(out, "Injecting fault...\n");
-
-        // print out about the injection
-        g_string_append_printf(out, "slept for %lu cycles\n", insn_count);
-        g_string_append_printf(out, "injected at row %lu, set %lu, bit 0x%lX\n",
-                                plan.cacheRow, plan.cacheSet, plan.cacheBit);
-
-        // which cache?
-        arch_word_t addr;
-        switch (plan.cacheName) {
-            case ICACHE:
-                addr = icache_get_addr(plan.cacheRow, plan.cacheSet);
-                break;
-            case DCACHE:
-                addr = dcache_get_addr(plan.cacheRow, plan.cacheSet);
-                break;
-            case L2CACHE:
-                addr = l2cache_get_addr(plan.cacheRow, plan.cacheSet);
-                break;
-        }
-        // what is the target byte?
-        uint32_t byteNum = plan.cacheBit / 8;
-        // bitmask
-        char bitMask = CREATE_BIT_MASK(1) << (plan.cacheBit % 8);
-
-        // write about it
-        g_string_append_printf(out, "block address is 0x08%X\n", addr);
-        g_string_append_printf(out, "bytenum = 0x%08X, bitmask = 0x%02X\n",
-                                byteNum, bitMask);
-        // g_string_append_printf(out, "value was 0x%08X\n", addr);
-
-        qemu_plugin_outs(out->str);
-    }
+    icache_invalidate_all();
+    cp_count += 1;
 }
 
 
@@ -290,13 +287,8 @@ static void check_insn_count(unsigned int vcpu_index, void* userdata)
  * Register the plugin.
  * This is kind of like "main".
  * Arguments:
- *  sleepCycles - the number of cycles to wait before injecting a fault
- *  cacheRow    - the row in the cache to inject fault
- *  cacheSet    - which set block
- *  cacheBit    - which bit in the block
- *                possible values: 0 -> ((blockSize * 8) - 1)
- *  cacheName   - which cache to inject into (NYI)
- *  doTag       - if the bit should be in the tag bits instead of data (NYI)
+ *  textBegin - first address in the address space of instruction memory
+ *  textEnd   - last address in the address space of instruction memory
  */
 QEMU_PLUGIN_EXPORT int qemu_plugin_install(qemu_plugin_id_t id,
                                             const qemu_info_t* info,
@@ -304,15 +296,10 @@ QEMU_PLUGIN_EXPORT int qemu_plugin_install(qemu_plugin_id_t id,
 {
     // parse arguments to the plugin
     // argv[0] is NOT the name of the program, like normal
-    uint64_t sleepCycles = 0;
-    // have to be 64 bit so can use stroul
-    uint64_t cacheRow, cacheSet, cacheBit;
-    char* cacheName;
 
     // allow all args or none
-    uint32_t minArgs = 2;
-    uint32_t numArgs = 7;
-    if ((argc < minArgs) || (argc > minArgs && argc != numArgs) )
+    uint32_t numArgs = 2;
+    if (argc != numArgs)
     {
         qemu_plugin_outs("Wrong number of arguments to plugin!\n");
         return !0;
@@ -328,39 +315,10 @@ QEMU_PLUGIN_EXPORT int qemu_plugin_install(qemu_plugin_id_t id,
             case 1:
                 textEnd = strtoul(p, NULL, 16);
                 break;
-            case 2:
-                sleepCycles = strtoul(p, NULL, 10);
-                break;
-            case 3:
-                cacheRow = strtoul(p, NULL, 10);
-                break;
-            case 4:
-                cacheSet = strtoul(p, NULL, 10);
-                break;
-            case 5:
-                cacheBit = strtoul(p, NULL, 10);
-                break;
-            case 6:
-                cacheName = p;
-                break;
             default:
                 qemu_plugin_outs("Too many input arguments to plugin!\n");
                 return !0;
         }
-    }
-
-    // optional - no arguments means only profiling
-    if (sleepCycles) {
-        plan.sleepCycles = sleepCycles;
-        plan.cacheRow = cacheRow;
-        plan.cacheSet = cacheSet;
-        plan.cacheBit = cacheBit;        
-    } else if (argc == 0) {
-        // only profiling
-        faultDone = 1;
-    } else {
-        qemu_plugin_outs("Error parsing plugin arguments!\n");
-        return !0;
     }
 
     // init the cache simulation
@@ -370,45 +328,6 @@ QEMU_PLUGIN_EXPORT int qemu_plugin_install(qemu_plugin_id_t id,
                 DCACHE_BLOCK_SIZE, DCACHE_POLICY);
     l2cache_init(L2CACHE_SIZE_BYTES, L2CACHE_ASSOCIATIVITY,
                 L2CACHE_BLOCK_SIZE, L2CACHE_POLICY);
-
-    if (argc > minArgs) {
-        // decode the cache name
-        if (memcmp(cacheName, "icache", 6) == 0) {
-            plan.cacheName = ICACHE;
-        } else if (memcmp(cacheName, "dcache", 6) == 0) {
-            plan.cacheName = DCACHE;
-        } else if (memcmp(cacheName, "l2cache", 7) == 0) {
-            plan.cacheName = L2CACHE;
-        } else {
-            qemu_plugin_outs("Invalid cache name!\n");
-            return !0;
-        }
-
-        // validate the injection parameters
-        // NOTE: no checking is done on the cycle count: if that doesn't happen
-        //  before the program exits, that is the user's problem
-        // TODO: do this without an explicit reference to the struct
-        const cache_t* cp;
-        switch (plan.cacheName) {
-            case ICACHE:
-                cp = icache_get_ptr();
-                break;
-            case DCACHE:
-                cp = dcache_get_ptr();
-                break;
-            case L2CACHE:
-                cp = l2cache_get_ptr();
-                break;
-        }
-
-        if ( (plan.cacheRow > cp->rows-1) ||
-             (plan.cacheSet > cp->associativity-1) ||
-             (plan.cacheBit > (cp->blockSize * 8)-1) )
-        {
-            qemu_plugin_outs("Invalid injection parameters!\n");
-            return !0;
-        }
-    }
 
     // `info` argument has information about qemu system state
     // see qemu_info_t in include/qemu/qemu-plugin.h for more details
@@ -448,11 +367,3 @@ static void plugin_exit(qemu_plugin_id_t id, void* p) {
     dcache_stats();
     l2cache_stats();
 }
-
-/*
- * Plan:
- * The plugin will keep track of the addresses in the cache,
- *  be responsible for changing values in memory (and tag bits in the future)
- * The fault injector will tell the plugin where to inject fault, and after how long.
- * Need a function to query the current number of cycles since start.
- */

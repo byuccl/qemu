@@ -8,6 +8,7 @@
 
 /********************************** includes **********************************/
 #include "cache-common.h"
+#include "arm-disas.h"
 
 
 /******************************* default values *******************************/
@@ -32,6 +33,7 @@ arch_word_t dcache_get_addr(uint64_t cacheRow, uint64_t cacheSet);
 int dcache_get_num_rows(void);
 int dcache_get_assoc(void);
 void dcache_invalidate_block(int row, int block);
+int dcache_is_cache_inst(insn_op_t* insn_op_data);
 
 
 #endif  /* __DCACHE_H */
