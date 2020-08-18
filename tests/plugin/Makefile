@@ -4,7 +4,7 @@ include $(BUILD_DIR)/config-host.mak
 include $(SRC_PATH)/rules.mak
 
 $(call set-vpath, $(SRC_PATH)/tests/plugin)
-VPATH += $(SRC_PATH)/tests/plugin/cache-sim
+VPATH += $(SRC_PATH)/tests/plugin/fault-inject
 
 NAMES :=
 NAMES += bb
@@ -14,8 +14,8 @@ NAMES += mem
 NAMES += hotblocks
 NAMES += howvec
 NAMES += hotpages
-NAMES += cache
-CACHE_SRCS := cache.o cache-common.o icache.o dcache.o l2cache.o arm-disas.o sockets.o
+NAMES += faultinject
+FAULT_INJECT_SRCS := cache.o cache-common.o icache.o dcache.o l2cache.o arm-disas.o sockets.o
 
 SONAMES := $(addsuffix .so,$(addprefix lib,$(NAMES)))
 
@@ -24,7 +24,7 @@ QEMU_CFLAGS += -I$(SRC_PATH)/include/qemu
 
 all: $(SONAMES)
 
-libcache.so: $(CACHE_SRCS)
+libfaultinject.so: $(FAULT_INJECT_SRCS)
 	$(CC) -shared -Wl,-soname,$@ -o $@ $^ $(LDLIBS)
 
 lib%.so: %.o

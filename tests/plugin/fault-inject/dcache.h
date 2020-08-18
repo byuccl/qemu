@@ -8,6 +8,7 @@
 
 /********************************** includes **********************************/
 #include "cache-common.h"
+#include "arm-disas.h"
 
 
 /******************************* default values *******************************/
@@ -33,6 +34,7 @@ int dcache_get_num_rows(void);
 int dcache_get_assoc(void);
 uint8_t dcache_block_valid(int row, int block);
 void dcache_invalidate_block(int row, int block);
+int dcache_is_cache_inst(insn_op_t* insn_op_data);
 int dcache_validate_injection(injection_plan_t* plan);
 
 
