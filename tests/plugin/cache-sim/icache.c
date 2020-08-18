@@ -85,25 +85,15 @@ arch_word_t icache_get_addr(uint64_t cacheRow, uint64_t cacheSet)
 }
 
 
-const cache_t* icache_get_ptr(void)
+uint8_t icache_block_valid(int row, int block)
 {
-    return &icache;
+    return cache_block_valid_common(&icache, row, block);
 }
 
 
-/*
- * Reset the entirety of the icache.
- */
-void icache_invalidate_all(void)
+int icache_validate_injection(injection_plan_t* plan)
 {
-    int row, way;
-    for (row = icache.rows-1; row >= 0; row--)
-    {
-        for (way = icache.associativity-1; way >= 0; way--)
-        {
-            cache_invalidate_block_common(&icache, row, way);
-        }
-    }
+    return cache_validate_injection_common(&icache, plan);
 }
 
 
@@ -127,5 +117,21 @@ int icache_is_cache_inst(insn_op_t* insn_op_data)
     else
     {
         return false;
+    }
+}
+
+
+/*
+ * Reset the entirety of the icache.
+ */
+void icache_invalidate_all(void)
+{
+    int row, way;
+    for (row = icache.rows-1; row >= 0; row--)
+    {
+        for (way = icache.associativity-1; way >= 0; way--)
+        {
+            cache_invalidate_block_common(&icache, row, way);
+        }
     }
 }

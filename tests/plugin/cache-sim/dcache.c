@@ -94,15 +94,15 @@ void dcache_store(uint64_t vaddr)
 }
 
 
-const cache_t* dcache_get_ptr(void)
-{
-    return &dcache;
-}
-
-
 arch_word_t dcache_get_addr(uint64_t cacheRow, uint64_t cacheSet)
 {
     return cache_get_addr_common(&dcache, cacheRow, cacheSet);
+}
+
+
+uint8_t dcache_block_valid(int row, int block)
+{
+    return cache_block_valid_common(&dcache, row, block);
 }
 
 void dcache_invalidate_block(int row, int block)
@@ -147,4 +147,10 @@ int dcache_is_cache_inst(insn_op_t* insn_op_data)
     {
         return false;
     }
+}
+
+
+int dcache_validate_injection(injection_plan_t* plan)
+{
+    return cache_validate_injection_common(&dcache, plan);
 }

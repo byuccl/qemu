@@ -91,13 +91,19 @@ void l2cache_store(uint64_t vaddr)
 }
 
 
-const cache_t* l2cache_get_ptr(void)
-{
-    return &l2cache;
-}
-
-
 arch_word_t l2cache_get_addr(uint64_t cacheRow, uint64_t cacheSet)
 {
     return cache_get_addr_common(&l2cache, cacheRow, cacheSet);
+}
+
+
+uint8_t l2cache_block_valid(int row, int block)
+{
+    return cache_block_valid_common(&l2cache, row, block);
+}
+
+
+int l2cache_validate_injection(injection_plan_t* plan)
+{
+    return cache_validate_injection_common(&l2cache, plan);
 }

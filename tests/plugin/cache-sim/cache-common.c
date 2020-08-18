@@ -65,6 +65,9 @@ int init_cache_struct(cache_t* cp, uint32_t cacheSize,
     cp->store_hits = 0;
     cp->store_misses = 0;
 
+    // cache struct is now valid
+    cp->validFlag = 1;
+
     return 0;
 }
 
@@ -74,6 +77,8 @@ int init_cache_struct(cache_t* cp, uint32_t cacheSize,
  */
 void free_cache_struct(cache_t* cp)
 {
+    // no longer valid
+    cp->validFlag = 0;
     // free the big memory
     free(cp->table[0]);
     // free the row of pointers
@@ -91,6 +96,10 @@ void free_cache_struct(cache_t* cp)
  */
 cache_result_t cache_load_common(cache_t* cp, uint64_t vaddr)
 {
+    // make sure cache struct is still valid
+    if (!cp->validFlag)
+        return CACHE_RESULT_MISS;
+
     // keep track of next victim
     uint32_t nextRowIdx = 0;
 
@@ -99,7 +108,7 @@ cache_result_t cache_load_common(cache_t* cp, uint64_t vaddr)
 
     // uint32_t blockOffsetBits = cp->maskInfo.blockOffsetMask & addr;
     uint32_t rowIdx = (addr >> cp->maskInfo.rowShift) & cp->maskInfo.rowMask;
-    uint32_t tagBits = addr >> cp->maskInfo.tagShift;
+    arch_word_t tagBits = addr >> cp->maskInfo.tagShift;
 
     // it might be in this row
     cache_entry_t* cacheRow = cp->table[rowIdx];
@@ -109,7 +118,7 @@ cache_result_t cache_load_common(cache_t* cp, uint64_t vaddr)
     cache_result_t result = CACHE_RESULT_MISS;
     for (i = 0; i < cp->associativity; i+=1) {
         // if valid and tag matches
-        if ( (cacheRow[i].valid) && (cacheRow[i].tag == tagBits) ) {
+        if ( (!cacheRow[i].dirty) && (cacheRow[i].tag == tagBits) ) {
             result = CACHE_RESULT_HIT;
             break;
         }
@@ -125,7 +134,7 @@ cache_result_t cache_load_common(cache_t* cp, uint64_t vaddr)
     cache_entry_t* foundSpot = NULL;
     // first look for invalid places to put it
     for (i = 0; i < cp->associativity; i+=1) {
-        if (!cacheRow[i].valid) {
+        if (cacheRow[i].dirty) {
             foundSpot = &cacheRow[i];
             break;
         }
@@ -155,7 +164,7 @@ cache_result_t cache_load_common(cache_t* cp, uint64_t vaddr)
     //  spot had the valid bit set
 
     // update the memory spot
-    foundSpot->valid = 1;
+    foundSpot->dirty = CACHE_NOT_DIRTY;
     foundSpot->tag = tagBits;
 
     return CACHE_RESULT_MISS;
@@ -169,6 +178,8 @@ cache_result_t cache_load_common(cache_t* cp, uint64_t vaddr)
  */
 cache_result_t cache_store_common(cache_t* cp, uint64_t vaddr)
 {
+    if (!cp->validFlag)
+        return CACHE_RESULT_MISS;
     // convert 64-bit address to be the size of word of the guest architecture
     arch_word_t addr = (arch_word_t) vaddr;
 
@@ -184,7 +195,7 @@ cache_result_t cache_store_common(cache_t* cp, uint64_t vaddr)
     cache_result_t result = CACHE_RESULT_MISS;
     for (i = 0; i < cp->associativity; i+=1) {
         // if valid and tag matches
-        if ( (cacheRow[i].valid) && (cacheRow[i].tag == tagBits) ) {
+        if ( (!cacheRow[i].dirty) && (cacheRow[i].tag == tagBits) ) {
             result = CACHE_RESULT_HIT;
             break;
         }
@@ -209,11 +220,48 @@ cache_result_t cache_store_common(cache_t* cp, uint64_t vaddr)
  */
 arch_word_t cache_get_addr_common(cache_t* cp, uint64_t cacheRow, uint64_t cacheSet)
 {
+    if (!cp->validFlag)
+        return 0;
     return (cp->table[cacheRow][cacheSet].tag << cp->maskInfo.tagShift) |
             (cacheRow << cp->maskInfo.rowShift);
 }
 
 void cache_invalidate_block_common(cache_t* cp, int row, int block)
 {
-    cp->table[row][block].valid = 0;
+    if (!cp->validFlag)
+        return;
+    cp->table[row][block].dirty = CACHE_DIRTY;
+}
+
+/*
+ * Is valid bit set in cache block?
+ * Return value of the bit
+ * Also returns 0 if invalid cache struct
+ */
+uint8_t cache_block_valid_common(cache_t* cp, int row, int block)
+{
+    if (!cp->validFlag)
+        return 0;
+    return !(cp->table[row][block].dirty);
+}
+
+
+/*
+ * Make sure that the injection parameters are valid for the given cache
+ * Return 0 success, non-zero otherwise
+ */
+int cache_validate_injection_common(cache_t* cp, injection_plan_t* plan)
+{
+    if (!cp->validFlag)
+        return -2;      // invalid cache struct
+    if ( (plan->cacheRow > cp->rows-1) ||
+            (plan->cacheSet > cp->associativity-1) ||
+            (plan->cacheWord > (cp->blockSize * sizeof(arch_word_t))-1) )
+    {
+        return -1;      // invalid parameters
+    }
+    else
+    {
+        return 0;       // valid parameters
+    }
 }

@@ -10,14 +10,18 @@
 #include <string.h>
 #include <unistd.h>
 #include <stdio.h>
+#include <time.h>
+
 #include <glib.h>
 
 #include <qemu-plugin.h>
 
-#include "icache.h"
-#include "dcache.h"
-#include "l2cache.h"
-#include "arm-disas.h"
+#include "injection.h"
+#include "../cache-sim/icache.h"
+#include "../cache-sim/dcache.h"
+#include "../cache-sim/l2cache.h"
+#include "../cache-sim/arm-disas.h"
+#include "sockets.h"
 
 // required export for it to build properly
 QEMU_PLUGIN_EXPORT int qemu_plugin_version = QEMU_PLUGIN_VERSION;
@@ -43,8 +47,12 @@ static void parse_mem(unsigned int vcpu_index, qemu_plugin_meminfo_t info,
                         uint64_t vaddr, void* userdata);
 static void cache_inst(unsigned int vcpu_index, void* userdata);
 static void icache_inst(unsigned int vcpu_index, void* userdata);
+static void check_insn_count(void);
 static void plugin_exit(qemu_plugin_id_t id, void* p);
 static void put_cbs_in_tbs(qemu_plugin_id_t id, struct qemu_plugin_tb* tb);
+static void receive_injection_info(void);
+// helpers
+void get_socket_args(void);
 
 // hack - https://stackoverflow.com/a/61977875/12940429
 void *qemu_get_cpu(int index);
@@ -56,13 +64,18 @@ static uint64_t insn_count = 0;
 static uint64_t load_count = 0;
 static uint64_t store_count = 0;
 static uint64_t cp_count = 0;
+static uint64_t tb_count = 0;
+static uint64_t uniq_insn_count = 0;
 static uint64_t textBegin = 0, textEnd = 0;     // begin and end addresses of .text
-static gboolean is_arm_arch = FALSE;
+static uint64_t mainBegin = 0;
 
 #ifdef DEBUG_INSN_DISAS
 char lastInsnStr[LAST_INSN_BUF_SIZE];
 #endif
 
+static injection_plan_t plan;
+static uint32_t faultDone = 0;
+static uint64_t doInject = 0;
 
 /************************* Cache Control Instructions *************************/
 static const uint32_t COPROC_RT_BITS = CREATE_BIT_MASK(4) << 12;
@@ -112,8 +125,37 @@ static arch_word_t get_insn_bits(struct qemu_plugin_insn* insn) {
 /*
  * Will register a callback with each instruction executed
  * Based on code in insn.c, hotpages.c, and mem.c plugins
+ * sleepCycles - the number of cycles to wait before injecting a fault
  */
 static void put_cbs_in_tbs(qemu_plugin_id_t id, struct qemu_plugin_tb* tb) {
+    // do stuff the first time
+    if (!tb_count) {
+        // look for data from the socket
+        if (!tb_count && doInject) {
+            // get sleep cycles only here
+            char* argStr;
+            argStr = sockets_recv();
+            plan.sleepCycles = strtoul(argStr, NULL, 10);
+            free(argStr);
+            g_autoptr(GString) out = g_string_new("");
+            // to get it to print
+            g_string_printf(out, "INFO: Sleeping for %ld cycles\n", plan.sleepCycles);
+            qemu_plugin_outs(out->str);
+        } else {
+            // ask for what the address of main() is so we can tell how many
+            //  cycles it takes to get there
+            char* argStr;
+            argStr = sockets_recv();
+            mainBegin = strtoul(argStr, NULL, 10);
+            free(argStr);
+            g_autoptr(GString) out = g_string_new("");
+            // to get it to print
+            g_string_printf(out, "INFO: main() starts at 0x%lX\n", mainBegin);
+            qemu_plugin_outs(out->str);
+        }
+    }
+    // number of unique tb's
+    tb_count += 1;
 
     // get the number of instructions in this tb
     size_t n = qemu_plugin_tb_n_insns(tb);
@@ -121,6 +163,7 @@ static void put_cbs_in_tbs(qemu_plugin_id_t id, struct qemu_plugin_tb* tb) {
 
     // iterate over each instruction and register a callback with it
     for (i = 0; i < n; i++) {
+        uniq_insn_count += 1;
         // get the handle for the instruction
         struct qemu_plugin_insn* insn = qemu_plugin_tb_get_insn(tb, i);
 
@@ -147,19 +190,13 @@ static void put_cbs_in_tbs(qemu_plugin_id_t id, struct qemu_plugin_tb* tb) {
                                         QEMU_PLUGIN_CB_NO_REGS,
                                         QEMU_PLUGIN_MEM_RW, NULL);
 
-        if (!is_arm_arch) {
-            continue;
-        }
-        /////////////////// Follows ARM Architecture ///////////////////
-        //////////////////// Specific Functionality ////////////////////
-
         arch_word_t insn_bits = get_insn_bits(insn);
 
         // also have to see if there are any instructions that invalidate the cache
         insn_op_t insn_op_data;
         cp_load_store_e cp_type = INSN_IS_COPROC_LOAD_STORE(&insn_op_data, insn_bits);
         if (cp_type >= CP_REG_TYPE_BASE) {
-
+ 
             if ( cp_type == CP_MCR )
             {
                 // controlling dcache?
@@ -187,8 +224,20 @@ static void put_cbs_in_tbs(qemu_plugin_id_t id, struct qemu_plugin_tb* tb) {
  */
 static void parse_instruction(unsigned int vcpu_index, void* userdata)
 {
+    uint64_t vaddr = (uint64_t)userdata;
     insn_count += 1;
-    icache_load((uint64_t)userdata);
+    icache_load(vaddr);
+    check_insn_count();
+
+    // see if we've hit main
+    if ( (!doInject) && (vaddr >= mainBegin) )
+    {
+        g_autoptr(GString) out = g_string_new("");
+        g_string_printf(out, "0x%08lX", insn_count);
+        sockets_send(out->str, out->len);
+        // reset mainBegin to be max int
+        mainBegin = UINT64_MAX;
+    }
 }
 
 
@@ -245,7 +294,6 @@ static void parse_mem(unsigned int vcpu_index, qemu_plugin_meminfo_t info,
  */
 static void cache_inst(unsigned int vcpu_index, void* userdata)
 {
-
     // Pass the instruction bits in literally
     arch_word_t insn_bits = (uint64_t) userdata;
 
@@ -260,28 +308,20 @@ static void cache_inst(unsigned int vcpu_index, void* userdata)
     // ARM "set" == my "row"
     // ARM "way" == my "way"
 
-    // debug printing
-    /* g_autoptr(GString) out = g_string_new("");
-     * g_string_printf(out, "cycle: %lu, Rt: 0x%08x\n", insn_count, readRt);
-     * g_string_append_printf(out, "  set: %#x, way: %#x\n", readSet, readWay);
-     * qemu_plugin_outs(out->str);
-     */
-
     // invalidate a specific cache row and block
     dcache_invalidate_block(readSet, readWay);
 
     cp_count += 1;
 }
 
-
 /*
  * There is a single instruction that invalides the entire icache
- * https://github.com/Xilinx/embeddedsw/blob/a60c084a0862559e2fa58fd4c82b0fe39b923e33/lib/bsp/standalone/src/arm/cortexa9/gcc/boot.S#L224
- *    mcr	p15, 0, r0, c7, c5, 0
- * Executes the "ICIALLU" pseudo-instruction
- * https://developer.arm.com/docs/ddi0595/h/aarch32-system-instructions/iciallu
- * Don't even need to read the register.
- */
+￼ * https://github.com/Xilinx/embeddedsw/blob/a60c084a0862559e2fa58fd4c82b0fe39b923e33/lib/bsp/standalone/src/arm/cortexa9/gcc/boot.S#L224
+￼ *    mcr	p15, 0, r0, c7, c5, 0
+￼ * Executes the "ICIALLU" pseudo-instruction
+￼ * https://developer.arm.com/docs/ddi0595/h/aarch32-system-instructions/iciallu
+￼ * Don't even need to read the register.
+￼ */
 static void icache_inst(unsigned int vcpu_index, void* userdata)
 {
     icache_invalidate_all();
@@ -290,11 +330,175 @@ static void icache_inst(unsigned int vcpu_index, void* userdata)
 
 
 /*
+ * TODO: L2 cache invalidate
+ * https://developer.arm.com/documentation/ddi0246/f/
+ * CoreLink Level 2 Cache Controller L2C-310 Technical Reference Manual
+ * Section 3.1.1 describes the initialization sequence.
+ * Part of this sequence is to write 0xFFFF to offset 0x77C, so this could be caught
+ *  by the plugin if it knew the base address of the L2 cache controller.
+ * For an example, see
+ * https://github.com/Xilinx/embeddedsw/blob/a60c084a0862559e2fa58fd4c82b0fe39b923e33/lib/bsp/standalone/src/arm/cortexa9/gcc/boot.S#L348
+ */
+
+
+/*
+ * Function is called every time a tb is executed.
+ * This is the stub for where fault injection will be performed.
+ * TODO: this could be moved to be inside the other callbacks, to give a 
+ *  more fine-grained cycle count, but at the cost of longer emulation time.
+ */
+static void check_insn_count(void)
+{
+    // see if it's time to inject the fault
+    if ( (!faultDone) && (insn_count >= plan.sleepCycles) )
+    {
+        faultDone = 1;
+
+        g_autoptr(GString) out = g_string_new("");
+        // to get it to print
+        g_string_printf(out, "INFO: Injecting fault...\n");
+        qemu_plugin_outs(out->str);
+
+        receive_injection_info();
+        // print out about the injection
+        g_string_printf(out, "INFO: injecting at row %lu, set %lu, word 0x%lX\n",
+                                plan.cacheRow, plan.cacheSet, plan.cacheWord);
+        qemu_plugin_outs(out->str);
+
+        // which cache?
+        arch_word_t addr;
+        switch (plan.cacheName) {
+            case ICACHE:
+                addr = icache_get_addr(plan.cacheRow, plan.cacheSet);
+                break;
+            case DCACHE:
+                addr = dcache_get_addr(plan.cacheRow, plan.cacheSet);
+                break;
+            case L2CACHE:
+                addr = l2cache_get_addr(plan.cacheRow, plan.cacheSet);
+                break;
+        }
+        // what is the target word?
+        // although it's byte addressable, injector operates on words
+        uint32_t byteNum = plan.cacheWord * sizeof(arch_word_t);
+        addr += byteNum;
+
+        // send how many cycles it actually was
+        g_string_printf(out, "0x%08lX", insn_count);
+        sockets_send(out->str, out->len);
+        // send the data
+        g_string_printf(out, "0x%08X", addr);
+        sockets_send(out->str, out->len);
+
+        // TODO: socket return value for success or failure
+    }
+}
+
+
+/****************************** argument helpers ******************************/
+void get_socket_args(void)
+{
+    // where in the cache - row and set
+    char* argStr = sockets_recv();
+    plan.cacheRow = strtoul(argStr, NULL, 10);
+    free(argStr);
+    argStr = sockets_recv();
+    plan.cacheSet = strtoul(argStr, NULL, 10);
+    free(argStr);
+
+    char* cacheName = sockets_recv();
+    // decode the cache name
+    if (memcmp(cacheName, "icache", 6) == 0) {
+        plan.cacheName = ICACHE;
+    } else if (memcmp(cacheName, "dcache", 6) == 0) {
+        plan.cacheName = DCACHE;
+    } else if (memcmp(cacheName, "l2cache", 7) == 0) {
+        plan.cacheName = L2CACHE;
+    } else {
+        qemu_plugin_outs("ERROR: Invalid cache name!\n");
+        // return !0;
+    }
+    free(cacheName);
+}
+
+/*
+ *  Arguments (from the socket):
+ *  cacheRow    - the row in the cache to inject fault
+ *  cacheSet    - which set block
+ *  cacheBit    - which bit in the block
+ *                possible values: 0 -> ((blockSize * 8) - 1)
+ *  cacheName   - which cache to inject into
+ *  doTag       - if the bit should be in the tag bits instead of data (NYI)
+ */
+static void receive_injection_info(void)
+{
+    qemu_plugin_outs("INFO: Waiting for socket args\n");
+
+    // where in the cache
+    get_socket_args();
+    // verify those are valid parameters
+    int invalid = 1;
+    switch (plan.cacheName) {
+        case ICACHE:
+            invalid = icache_validate_injection(&plan);
+            break;
+        case DCACHE:
+            invalid = dcache_validate_injection(&plan);
+            break;
+        case L2CACHE:
+            invalid = l2cache_validate_injection(&plan);
+            break;
+        default:
+            invalid = 1;
+    }
+    if (invalid) {
+        qemu_plugin_outs("ERROR: Invalid injection parameters!\n");
+        // return !0;
+    }
+
+    // see if the line is valid
+    uint8_t valid = 0;
+    switch (plan.cacheName) {
+        case ICACHE:
+            valid = icache_block_valid(plan.cacheRow, plan.cacheSet);
+            break;
+        case DCACHE:
+            valid = dcache_block_valid(plan.cacheRow, plan.cacheSet);
+            break;
+        case L2CACHE:
+            valid = l2cache_block_valid(plan.cacheRow, plan.cacheSet);
+            break;
+        default:
+            valid = 0;
+            break;
+    }
+
+    // send valid-ness back to the supervisor
+    g_autoptr(GString) out = g_string_new("");
+    g_string_printf(out, "%hhu\n", valid);    // unsigned char
+    sockets_send(out->str, out->len);
+    // some discussion about waiting for a valid block, but that is not realistic
+    //   of radiation tests, even if it takes longer
+
+    // then get the block
+    char* argStr = sockets_recv();
+    plan.cacheWord = strtoul(argStr, NULL, 10);
+    free(argStr);
+
+    // NOTE: no checking is done on the cycle count: if that doesn't happen
+    //  before the program exits, that is the user's problem
+}
+
+
+/*
  * Register the plugin.
  * This is kind of like "main".
  * Arguments:
- *  textBegin - first address in the address space of instruction memory
- *  textEnd   - last address in the address space of instruction memory
+ * textBegin - the address that the .text section starts at
+ * textEnd   - the address that the .text section ends at
+ * portNum   - port number of socket
+ * hostname  - IPV4 address of socket
+ * doInject  - whether or not to inject a fault
  */
 QEMU_PLUGIN_EXPORT int qemu_plugin_install(qemu_plugin_id_t id,
                                             const qemu_info_t* info,
@@ -302,12 +506,21 @@ QEMU_PLUGIN_EXPORT int qemu_plugin_install(qemu_plugin_id_t id,
 {
     // parse arguments to the plugin
     // argv[0] is NOT the name of the program, like normal
+    uint16_t portNum;
+    char* hostname;
+
+    // only allow ARM target
+    if (strcmp(info->target_name, "arm") != 0) {
+        qemu_plugin_outs("ERROR: Architecture not supported!\n");
+        return !0;
+    }
 
     // allow all args or none
-    uint32_t numArgs = 2;
-    if (argc != numArgs)
+    uint32_t minArgs = 2;
+    uint32_t numArgs = 5;
+    if ((argc < minArgs) || (argc > minArgs && argc != numArgs) )
     {
-        qemu_plugin_outs("Wrong number of arguments to plugin!\n");
+        qemu_plugin_outs("ERROR: Wrong number of arguments to plugin!\n");
         return !0;
     }
 
@@ -321,18 +534,36 @@ QEMU_PLUGIN_EXPORT int qemu_plugin_install(qemu_plugin_id_t id,
             case 1:
                 textEnd = strtoul(p, NULL, 16);
                 break;
+            case 2:
+                // we're using IPV4
+                // TODO: don't need socket if not injecting
+                portNum = (uint16_t) strtoul(p, NULL, 10);
+                break;
+            case 3:
+                hostname = p;
+                break;
+            case 4:
+                doInject = strtoul(p, NULL, 10);
+                break;
             default:
-                qemu_plugin_outs("Too many input arguments to plugin!\n");
+                qemu_plugin_outs("ERROR: Too many input arguments to plugin!\n");
                 return !0;
         }
     }
 
-    // record if we can use target specific functions
-    if (strcmp(info->target_name, "arm") == 0) {
-        is_arm_arch = TRUE;
+    // set up the socket for communication
+    if (sockets_init(portNum, hostname)) {
+        qemu_plugin_outs("ERROR: setting up socket!\n");
+        return !0;
+    }
+
+    if (!doInject) {
+        // skip inserting the callbacks if not injecting
+        faultDone = 1;
     }
 
     // init the cache simulation
+    // TODO: should we make this parametrized by socket as well?
     icache_init(ICACHE_SIZE_BYTES, ICACHE_ASSOCIATIVITY,
                 ICACHE_BLOCK_SIZE, ICACHE_POLICY);
     dcache_init(DCACHE_SIZE_BYTES, DCACHE_ASSOCIATIVITY,
@@ -340,23 +571,18 @@ QEMU_PLUGIN_EXPORT int qemu_plugin_install(qemu_plugin_id_t id,
     l2cache_init(L2CACHE_SIZE_BYTES, L2CACHE_ASSOCIATIVITY,
                 L2CACHE_BLOCK_SIZE, L2CACHE_POLICY);
 
-    // `info` argument has information about qemu system state
-    // see qemu_info_t in include/qemu/qemu-plugin.h for more details
-
     // register the functions in this file
     qemu_plugin_register_vcpu_tb_trans_cb(id, put_cbs_in_tbs);
 
     // to be run at exit
     qemu_plugin_register_atexit_cb(id, plugin_exit, NULL);
 
-    // print status - debug
-    /*
-     * g_autoptr(GString) out = g_string_new("");
-     * g_string_printf(out, "Initializing...\n");
-     * g_string_append_printf(out, "text: 0x%lX - 0x%lX\n", textBegin, textEnd);
-     * g_string_append_printf(out, "target: %s\n", info->target_name);
-     * qemu_plugin_outs(out->str);
-    */
+    // print status
+    g_autoptr(GString) out = g_string_new("");
+    g_string_printf(out, "INFO: do inject? %ld\n", doInject);
+    g_string_append_printf(out, "INFO: text: 0x%lX - 0x%lX\n", textBegin, textEnd);
+    g_string_append_printf(out, "INFO: target: %s\n", info->target_name);
+    qemu_plugin_outs(out->str);
 
     return 0;
 }
@@ -368,15 +594,28 @@ QEMU_PLUGIN_EXPORT int qemu_plugin_install(qemu_plugin_id_t id,
 static void plugin_exit(qemu_plugin_id_t id, void* p) {
     // based on example in mem.c
     g_autoptr(GString) out = g_string_new("");
-    
-    g_string_printf(out,        "insn count:           %10ld\n", insn_count);
-    g_string_append_printf(out, "load count:           %10ld\n", load_count);
-    g_string_append_printf(out, "store count:          %10ld\n", store_count);
-    g_string_append_printf(out, "cp count:             %10ld\n", cp_count);
 
-    qemu_plugin_outs(out->str);
+    if (plan.sleepCycles == 0) {
+        g_string_printf(out,        "INFO: insn count:           %10ld\n", insn_count);
+        g_string_append_printf(out, "INFO: load count:           %10ld\n", load_count);
+        g_string_append_printf(out, "INFO: store count:          %10ld\n", store_count);
+        g_string_append_printf(out, "INFO: cp count:             %10ld\n", cp_count);
+        g_string_append_printf(out, "INFO: tb count:             %10ld\n", tb_count);
+        g_string_append_printf(out, "INFO: unique insns:         %10ld\n", uniq_insn_count);
+        qemu_plugin_outs(out->str);
 
-    icache_stats();
-    dcache_stats();
-    l2cache_stats();
+        // if there was no injection, report the number of cycles
+        g_string_printf(out, "0x%08lX\n", insn_count);
+        sockets_send(out->str, out->len);
+    }
+
+    sockets_exit();
 }
+
+/*
+ * Plan:
+ * The plugin will keep track of the addresses in the cache,
+ *  be responsible for changing values in memory (and tag bits in the future)
+ * The fault injector will tell the plugin where to inject fault, and after how long.
+ * Need a function to query the current number of cycles since start.
+ */

@@ -28,9 +28,10 @@ void icache_cleanup(void);
 void icache_stats(void);
 void icache_load(uint64_t vaddr);
 arch_word_t icache_get_addr(uint64_t cacheRow, uint64_t cacheSet);
-const cache_t* icache_get_ptr(void);
+uint8_t icache_block_valid(int row, int block);
 void icache_invalidate_all(void);
 int icache_is_cache_inst(insn_op_t* insn_op_data);
+int icache_validate_injection(injection_plan_t* plan);
 
 
 #endif  /* __ICACHE_H */
