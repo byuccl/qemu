@@ -10,7 +10,6 @@
 #include <string.h>
 #include <unistd.h>
 #include <stdio.h>
-#include <time.h>
 
 #include <glib.h>
 
@@ -114,7 +113,6 @@ static arch_word_t get_insn_bits(struct qemu_plugin_insn* insn) {
 /*
  * Will register a callback with each instruction executed
  * Based on code in insn.c, hotpages.c, and mem.c plugins
- * sleepCycles - the number of cycles to wait before injecting a fault
  */
 static void put_cbs_in_tbs(qemu_plugin_id_t id, struct qemu_plugin_tb* tb) {
 
@@ -309,7 +307,7 @@ QEMU_PLUGIN_EXPORT int qemu_plugin_install(qemu_plugin_id_t id,
     uint32_t numArgs = 2;
     if (argc != numArgs)
     {
-        qemu_plugin_outs("ERROR: Wrong number of arguments to plugin!\n");
+        qemu_plugin_outs("Wrong number of arguments to plugin!\n");
         return !0;
     }
 
@@ -324,7 +322,7 @@ QEMU_PLUGIN_EXPORT int qemu_plugin_install(qemu_plugin_id_t id,
                 textEnd = strtoul(p, NULL, 16);
                 break;
             default:
-                qemu_plugin_outs("ERROR: Too many input arguments to plugin!\n");
+                qemu_plugin_outs("Too many input arguments to plugin!\n");
                 return !0;
         }
     }
@@ -335,7 +333,6 @@ QEMU_PLUGIN_EXPORT int qemu_plugin_install(qemu_plugin_id_t id,
     }
 
     // init the cache simulation
-    // TODO: should we make this parametrized by socket as well?
     icache_init(ICACHE_SIZE_BYTES, ICACHE_ASSOCIATIVITY,
                 ICACHE_BLOCK_SIZE, ICACHE_POLICY);
     dcache_init(DCACHE_SIZE_BYTES, DCACHE_ASSOCIATIVITY,
