@@ -27,7 +27,6 @@ void l2cache_cleanup(void);
 void l2cache_stats(void);
 void l2cache_load(uint64_t vaddr);
 void l2cache_store(uint64_t vaddr);
-const cache_t* l2cache_get_ptr(void);
 arch_word_t l2cache_get_addr(uint64_t cacheRow, uint64_t cacheSet);
 uint8_t l2cache_block_valid(int row, int block);
 int l2cache_validate_injection(injection_plan_t* plan);

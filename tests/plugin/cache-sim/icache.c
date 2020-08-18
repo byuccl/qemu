@@ -77,18 +77,23 @@ void icache_load(uint64_t vaddr) {
 
 
 /*
- * Reset the entirety of the icache.
+ * Request the address stored in a given row and column of the cache.
  */
-void icache_invalidate_all(void)
+arch_word_t icache_get_addr(uint64_t cacheRow, uint64_t cacheSet)
 {
-    int row, way;
-    for (row = icache.rows-1; row >= 0; row--)
-    {
-        for (way = icache.associativity-1; way >= 0; way--)
-        {
-            cache_invalidate_block_common(&icache, row, way);
-        }
-    }
+    return cache_get_addr_common(&icache, cacheRow, cacheSet);
+}
+
+
+uint8_t icache_block_valid(int row, int block)
+{
+    return cache_block_valid_common(&icache, row, block);
+}
+
+
+int icache_validate_injection(injection_plan_t* plan)
+{
+    return cache_validate_injection_common(&icache, plan);
 }
 
 
@@ -117,21 +122,16 @@ int icache_is_cache_inst(insn_op_t* insn_op_data)
 
 
 /*
- * Request the address stored in a given row and column of the cache.
+ * Reset the entirety of the icache.
  */
-arch_word_t icache_get_addr(uint64_t cacheRow, uint64_t cacheSet)
+void icache_invalidate_all(void)
 {
-    return cache_get_addr_common(&icache, cacheRow, cacheSet);
-}
-
-
-uint8_t icache_block_valid(int row, int block)
-{
-    return cache_block_valid_common(&icache, row, block);
-}
-
-
-int icache_validate_injection(injection_plan_t* plan)
-{
-    return cache_validate_injection_common(&icache, plan);
+    int row, way;
+    for (row = icache.rows-1; row >= 0; row--)
+    {
+        for (way = icache.associativity-1; way >= 0; way--)
+        {
+            cache_invalidate_block_common(&icache, row, way);
+        }
+    }
 }

@@ -17,10 +17,10 @@
 #include <qemu-plugin.h>
 
 #include "injection.h"
-#include "icache.h"
-#include "dcache.h"
-#include "l2cache.h"
-#include "arm-disas.h"
+#include "../cache-sim/icache.h"
+#include "../cache-sim/dcache.h"
+#include "../cache-sim/l2cache.h"
+#include "../cache-sim/arm-disas.h"
 #include "sockets.h"
 
 // required export for it to build properly
