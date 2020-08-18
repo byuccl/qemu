@@ -1,4 +1,4 @@
-# QEMU Cache Simulation
+# QEMU Cache Emulation
 
 This document describes the functionality of the plugin that we have created to do cache emulation with QEMU.  This will primarily describe the operation of the plugin.  See the [page about plugins](plugins.md) for more generic information about how to make plugins.
 
@@ -53,25 +53,11 @@ l2cache store hits:       413611
 l2cache store misses:       1885
 ```
 
-It would be nice to have some way to introspect the state of the cache while QEMU is running, though I don't think plugins support [QMP](https://wiki.qemu.org/Documentation/QMP).
+The user is then able to use this data to make an assessment of the cache utilization of their code.
 
 
-# Notes
+# Cache Control Instructions
 
-There is one class of instruction that we still need to take care of decoding, and that is the ones that control the caches.  There are instructions that tell the cache to invalidate a way/line, and on some architectures, the entire cache.
+Many architectures have instructions that are used to control the system caches.  In an effort to be more accurate in the emulation of our target architecture, we added support for ARM cache control instructions.
 
-For the Cortex-A9, we see in [boot.S](https://github.com/Xilinx/embeddedsw/blob/master/lib/bsp/standalone/src/arm/cortexa9/gcc/boot.S#L469) that the line
-```
-mcr     p15, 0, r11, c7, c6, 2
-```
-invalidates a block in a row of the cache.
-
-Source: [ARM TRM](http://infocenter.arm.com/help/topic/com.arm.doc.ddi0388f/DDI0388F_cortex_a9_r2p2_trm.pdf) section 4.3.20, executes operation [DCISW](https://developer.arm.com/docs/ddi0595/b/aarch32-system-instructions/dcisw).
-
-
-boot.S:
-way number counts down 3-0, set number counts down 127-0
-Why does it not count 255-0?
-Cache is 32kB / 32 byte block = 1k blocks
-1024 blocks / 4-way set associativity = 256 rows
-Probably the QEMU system information is wrong about the number of rows
+See [Disassembling ARM Instructions](armdis.md) for more information.
