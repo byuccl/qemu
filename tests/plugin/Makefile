@@ -15,6 +15,7 @@ NAMES += mem
 NAMES += hotblocks
 NAMES += howvec
 NAMES += hotpages
+NAMES += profile
 NAMES += cache
 NAMES += faultinject
 

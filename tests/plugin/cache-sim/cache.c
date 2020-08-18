@@ -10,6 +10,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <stdio.h>
+
 #include <glib.h>
 
 #include <qemu-plugin.h>
@@ -25,7 +26,7 @@ QEMU_PLUGIN_EXPORT int qemu_plugin_version = QEMU_PLUGIN_VERSION;
 
 /******************************** definitions *********************************/
 // have available the disassembled string when debugging the callbacks
-#define DEBUG_INSN_DISAS
+// #define DEBUG_INSN_DISAS
 #ifdef DEBUG_INSN_DISAS
 #define LAST_INSN_BUF_SIZE 64
 #endif
@@ -288,7 +289,6 @@ static void icache_inst(unsigned int vcpu_index, void* userdata)
     cp_count += 1;
 }
 
-
 /*
  * Register the plugin.
  * This is kind of like "main".
@@ -368,7 +368,7 @@ QEMU_PLUGIN_EXPORT int qemu_plugin_install(qemu_plugin_id_t id,
 static void plugin_exit(qemu_plugin_id_t id, void* p) {
     // based on example in mem.c
     g_autoptr(GString) out = g_string_new("");
-    
+
     g_string_printf(out,        "insn count:           %10ld\n", insn_count);
     g_string_append_printf(out, "load count:           %10ld\n", load_count);
     g_string_append_printf(out, "store count:          %10ld\n", store_count);
