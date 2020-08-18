@@ -2,11 +2,11 @@
 README
 ===========
 
-This branch is an attempt to recreate and expand on the work done in this paper:
+This repository is a fork of `QEMU v4.2.0 <https://github.com/qemu/qemu/tree/v4.2.0>`_.  The main purpose of this fork was to create a plugin for QEMU that could act as a cache emulator.
+
+The original inspiration to use QEMU came from work done in this paper:
 
 * `Cache Simulation for Instruction Set Simulator QEMU <https://ieeexplore.ieee.org/document/6945730/>`_
-
-This branch is under active development, and so may not work properly.  Stable(?) releases will be tagged.
 
 To read the original README file, see the master branch
 
@@ -14,6 +14,10 @@ To read the original README file, see the master branch
 
 QEMU as a whole is released under the GNU General Public License,
 version 2. For full licensing details, consult the LICENSE file.
+
+For more information about the plugins we have created, please visit the following folder for documentation:
+
+* `<https://github.com/byuccl/qemu/blob/cache-sim/ccl-changes>`_
 
 
 Building
@@ -23,7 +27,7 @@ QEMU is multi-platform software intended to be buildable on all modern
 Linux platforms, OS-X, Win32 (via the Mingw64 toolchain) and a variety
 of other UNIX targets. 
 
-All development in this branch has been done on Ubuntu 16.04.
+All development in this branch has been done on Ubuntu 16.04, with some testing on Ubuntu 18.04.
 
 The steps to build QEMU that we use are:
 
@@ -35,33 +39,13 @@ The steps to build QEMU that we use are:
   mkdir build
   cd build
   # we only support arm 32 bit at this point
-  ../configure --prefix=$INSTALL_PREFIX --target-list=arm-softmmu --enable-debug
+  ../configure --prefix=$INSTALL_PREFIX --target-list=arm-softmmu --enable-debug --enable-plugins
   make -j4
   make install
 
 You may also wish to add the flag ``--enable-profiler``
 
 To build only for this target for the first time will take 1-3 minutes, depending on your processor and internet connection.
-
-
-More Information
-==================
-
-Creating TCG Plugins
-**************************
-See the Qemu documentation on the Tiny Code Generator (TCG)
-
-* `<https://wiki.qemu.org/Documentation/TCG>`_
-
-And the documentation for plugins.
-
-* `<https://qemu.readthedocs.io/en/stable/devel/tcg-plugins.html>`_
-
-We also have a page written up about our plugin
-
-* `<https://github.com/byuccl/qemu/blob/cache-sim/ccl-changes/plugins.md>`_
-* `<https://github.com/byuccl/qemu/blob/cache-sim/ccl-changes/cache-sim.md>`_
-
 
 
 Contact

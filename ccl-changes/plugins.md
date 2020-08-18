@@ -1,8 +1,15 @@
 Creating QEMU Plugins
 ===========================
 
- - [Official Documentation](https://qemu.readthedocs.io/en/stable/devel/tcg-plugins.html)
- - [Small Discussion](https://stackoverflow.com/questions/58766571/how-to-count-the-number-of-guest-instructions-qemu-executed-from-the-beginning-t)
+In this file we discuss some general ideas about writing QEMU plugins.
+
+This guide was written for QEMU 4.2.0, the first version with plugin support.  It is possible that significant changes have occurred since this was written.
+
+Some relevant links:
+
+ - [What is the TCG?](https://wiki.qemu.org/Documentation/TCG) (QEMU Wiki)
+ - [Official Plugin Documentation](https://qemu.readthedocs.io/en/stable/devel/tcg-plugins.html) (QEMU Docs)
+ - [Small Discussion on Plugins](https://stackoverflow.com/questions/58766571/how-to-count-the-number-of-guest-instructions-qemu-executed-from-the-beginning-t) (Stack Overflow)
 
 
 Building
@@ -13,6 +20,7 @@ When you run the `configure` script, make sure to give it the `--enable-plugins`
 You will need to register your plugin .so (shared object) file with the build system.  Edit the file `tests/plugin/Makefile` and add the name of your plugin to the symbol `NAMES`.
 
 Then you will have to run `make plugins` from the main build directory.
+
 
 Running
 --------
@@ -25,7 +33,9 @@ When you run Qemu with the plugin, add the following:
 -D plugin_output.log
 ```
 
-This loads the plugin, enables plugin logging, and redirects it to a file named `plugin_output.log`
+- `-plugin` loads the plugin
+- `-d plugin` enables plugin logging
+- `-D plugin_output.log` redirects plugin logging to a file named `plugin_output.log`
 
 
 Details about writing plugins
@@ -61,8 +71,31 @@ When our function `put_cbs_in_tbs` is called at each tb translation event, we us
 
 There are two kinds of callbacks that can be registered with any given instruction.  The first, `qemu_plugin_register_vcpu_insn_exec_cb`, registers a function to be called when an instruction is executed.  The second, `qemu_plugin_register_vcpu_mem_cb`, registers a function to be called when a memory operation occurs.  There are also `inline` versions of these functions.  See `qemu-plugin.h` for more information about them, as well as the example plugin `insn.c`.
 
-COMING SOON: what information is available in an instruction callback?
 
+Callbacks on Instruction Execution
+-----------------------------------
+
+The file [qemu-plugin.h](https://github.com/byuccl/qemu/blob/cache-sim/include/qemu/qemu-plugin.h) defines an API of sorts that the plugin can use to get information from the running QEMU instance.  We will examine a few parts of this file.
+
+Normal instruction callbacks are defined with the following prototype:
+```c
+typedef void (*qemu_plugin_vcpu_udata_cb_t)(unsigned int vcpu_index,
+                                            void *userdata);
+```
+
+On a instruction execution callback, the function 1) knows which CPU it is being executed on and 2) has some data the application programmer passed in.  This can be whatever you want.  In our file, `cache.c`, in the function `parse_instruction`, we pass in the address of the instruction being executed.
+
+There is also a different type of instruction callback that can be executed on instructions which access memory:
+```c
+typedef void
+(*qemu_plugin_vcpu_mem_cb_t)(unsigned int vcpu_index,
+                             qemu_plugin_meminfo_t info, uint64_t vaddr,
+                             void *userdata);
+```
+
+There are 2 additional arguments to these kinds of callbacks.  The `info` can be used to query more information about the instruction, and `vaddr` could be the address in memory being operated on.
+
+See `hotpages.c`, an example plugin included with QEMU, for another example of how this part works.
 
 
 More Resources

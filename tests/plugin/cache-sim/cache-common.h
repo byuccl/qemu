@@ -7,7 +7,7 @@
 
 /********************************** includes **********************************/
 #include "cache-sim.h"
-#include "injection.h"
+#include "../fault-inject/injection.h"
 
 
 /******************************** definitions *********************************/

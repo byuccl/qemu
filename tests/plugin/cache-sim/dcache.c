@@ -121,6 +121,35 @@ int dcache_get_assoc(void)
 }
 
 
+/* check for specific opcode setup
+ * MCR<c> <coproc>, <opc1>, <Rt>, <CRn>, <CRm>{, <opc2>}
+ * mcr     p15,      0,      r11,  c7,    c6,     2
+ * Rt - SetWay, bits [31:4]; Level, bits [3:1]; bit 0 reserved
+ * A = log2(ASSOCIATIVITY)          (=2)
+ * L = log2(LINELEN)                (=5)
+ * S = log2(NSETS)                  (=8)
+ * B = (L + S)                      (=13)
+ * Way, bits[31:32-A] - the number of the way to operate on
+ * Set, bits[B-1:L]   - the number of the set to operate on
+ */
+int dcache_is_cache_inst(insn_op_t* insn_op_data)
+{
+    if (
+        (insn_op_data->bitfield.coproc == 0xE) &&
+        (insn_op_data->bitfield.type == 0x0) &&
+        (insn_op_data->bitfield.Rn == 0x7) &&
+        (insn_op_data->bitfield.Rm == 0x6) &&
+        (insn_op_data->bitfield.Rt2 == 0x2)
+    ) {
+        return true;
+    }
+    else
+    {
+        return false;
+    }
+}
+
+
 int dcache_validate_injection(injection_plan_t* plan)
 {
     return cache_validate_injection_common(&dcache, plan);
