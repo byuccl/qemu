@@ -2,18 +2,10 @@
  * Qemu plugin to profile execution.
  * Simulates processor caches.
  *
- * Initial idea:
- - make a new plugin
- - at start, take variable length list of addresses to watch for
- - when these instruction addresses are hit, send the address and cycle count back
- - communication on socket, in JSON format
- - Python driver, read ELF file for function addresses
- *
- * New idea:
+ * Basic idea:
  - There is a file with the input information; pass filename as arg
  - Write profile to output file
- - This way, no sockets are needed
- - Still have a Python driver to generate input and parse output
+ - Have a Python driver to generate input and parse output
  */
 
 /********************************** includes **********************************/
@@ -40,8 +32,12 @@ QEMU_PLUGIN_EXPORT int qemu_plugin_version = QEMU_PLUGIN_VERSION;
 #define CPU_STRUCT_OFFSET (SIZE_OF_CPUState + SIZE_OF_CPUNegativeOffsetState + 8)
 // investigation with GDB shows that the above calculation is off by 8 bytes
 
+// support FreeRTOS stuff
+// #define FREERTOS_SUPPORT
+#ifdef FREERTOS_SUPPORT
 // check FreeRTOSConfig.h, but default is 16
 #define MAX_TASK_NAME_LEN 16
+#endif
 
 
 /**************************** function prototypes *****************************/
@@ -49,12 +45,14 @@ static void plugin_exit(qemu_plugin_id_t id, void* p);
 static void read_input_file(const char* filePath);
 static void on_tb_translate(qemu_plugin_id_t id, struct qemu_plugin_tb* tb);
 static void print_insn_hit(unsigned int vcpu_index, void* userdata);
-static void print_context_switch(unsigned int vcpu_index, void* userdata);
 // hack - https://stackoverflow.com/a/61977875/12940429
 void *qemu_get_cpu(int index);
 static uint32_t get_cpu_register(unsigned int cpu_index, unsigned int reg);
 extern void cpu_physical_memory_rw(uint64_t addr, uint8_t *buf,
                                     uint64_t len, int is_write);
+#ifdef FREERTOS_SUPPORT
+static void print_context_switch(unsigned int vcpu_index, void* userdata);
+#endif
 
 
 /********************************** globals ***********************************/
@@ -62,13 +60,21 @@ static FILE* inputFile;
 static FILE* outputFile;
 static GHashTable* funcMap;
 static uint64_t cycleCount = 0;
+static gboolean is_arm_arch = FALSE;
+#ifdef FREERTOS_SUPPORT
 static uint64_t curTCBaddr = 0;
 static char taskNameBuf[MAX_TASK_NAME_LEN];
+#endif
 
 
 /********************************* functions **********************************/
 
 static uint32_t get_cpu_register(unsigned int cpu_index, unsigned int reg) {
+    // only work if this is a supported platform
+    if (!is_arm_arch) {
+        return 0;
+    }
+
     uint8_t* cpu = qemu_get_cpu(cpu_index);
     return *(uint32_t*)( cpu + CPU_STRUCT_OFFSET + (reg * 4) );
 }
@@ -111,6 +117,11 @@ QEMU_PLUGIN_EXPORT int qemu_plugin_install(qemu_plugin_id_t id,
 
     // register the callback functions
     qemu_plugin_register_vcpu_tb_trans_cb(id, on_tb_translate);
+
+    // record if we can use target specific functions
+    if (strcmp(info->target_name, "arm") == 0) {
+        is_arm_arch = TRUE;
+    }
 
     return 0;
 }
@@ -163,12 +174,14 @@ static void read_input_file(const char* filePath) {
             // reset
             numRead2 = 0;
 
+            #ifdef FREERTOS_SUPPORT
             // special case
             if (strcmp(funcNameBuf, "pxCurrentTCB") == 0) {
                 curTCBaddr = start;
                 numEntries -= 1;
                 continue;
             }
+            #endif
 
             // fprintf(outputFile, "%s starts at %#lx\n", funcNameBuf, start);
             // g_string_printf(out, "\nrest of string: %s", inputBuffer+numRead);
@@ -231,11 +244,13 @@ static void on_tb_translate(qemu_plugin_id_t id, struct qemu_plugin_tb* tb) {
             // register a printing callback
             qemu_plugin_register_vcpu_insn_exec_cb(
                     insn, print_insn_hit, QEMU_PLUGIN_CB_R_REGS, val);
+            #ifdef FREERTOS_SUPPORT
             // special case
             if (memcmp(val, "<- vTaskSwitchContext", 19) == 0) {
                 qemu_plugin_register_vcpu_insn_exec_cb(
                         insn, print_context_switch, QEMU_PLUGIN_CB_NO_REGS, NULL);
             }
+            #endif
         }
 
         // all instructions will increment the global cycle counter
@@ -260,6 +275,7 @@ static void print_insn_hit(unsigned int vcpu_index, void* userdata) {
 }
 
 
+#ifdef FREERTOS_SUPPORT
 static void print_context_switch(unsigned int vcpu_index, void* userdata) {
     // read the value of pxCurrentTCB
     uint32_t pxCurrentTCBval;
@@ -282,6 +298,7 @@ static void print_context_switch(unsigned int vcpu_index, void* userdata) {
      *  sizeof(pxCurrentTCB->pcTaskName)).
      */
 }
+#endif
 
 
 /*
