@@ -58,6 +58,7 @@ static uint64_t load_count = 0;
 static uint64_t store_count = 0;
 static uint64_t cp_count = 0;
 static uint64_t textBegin = 0, textEnd = 0;     // begin and end addresses of .text
+static gboolean is_arm_arch = FALSE;
 
 #ifdef DEBUG_INSN_DISAS
 char lastInsnStr[LAST_INSN_BUF_SIZE];
@@ -146,6 +147,12 @@ static void put_cbs_in_tbs(qemu_plugin_id_t id, struct qemu_plugin_tb* tb) {
         qemu_plugin_register_vcpu_mem_cb(insn, parse_mem,
                                         QEMU_PLUGIN_CB_NO_REGS,
                                         QEMU_PLUGIN_MEM_RW, NULL);
+
+        if (!is_arm_arch) {
+            continue;
+        }
+        /////////////////// Follows ARM Architecture ///////////////////
+        //////////////////// Specific Functionality ////////////////////
 
         arch_word_t insn_bits = get_insn_bits(insn);
 
@@ -321,6 +328,11 @@ QEMU_PLUGIN_EXPORT int qemu_plugin_install(qemu_plugin_id_t id,
         }
     }
 
+    // record if we can use target specific functions
+    if (strcmp(info->target_name, "arm") == 0) {
+        is_arm_arch = TRUE;
+    }
+
     // init the cache simulation
     icache_init(ICACHE_SIZE_BYTES, ICACHE_ASSOCIATIVITY,
                 ICACHE_BLOCK_SIZE, ICACHE_POLICY);
@@ -338,12 +350,14 @@ QEMU_PLUGIN_EXPORT int qemu_plugin_install(qemu_plugin_id_t id,
     // to be run at exit
     qemu_plugin_register_atexit_cb(id, plugin_exit, NULL);
 
-    // print status
-    g_autoptr(GString) out = g_string_new("");
-    g_string_printf(out, "Initializing...\n");
-    g_string_append_printf(out, "text: 0x%lX - 0x%lX\n", textBegin, textEnd);
-    g_string_append_printf(out, "target: %s\n", info->target_name);
-    qemu_plugin_outs(out->str);
+    // print status - debug
+    /*
+     * g_autoptr(GString) out = g_string_new("");
+     * g_string_printf(out, "Initializing...\n");
+     * g_string_append_printf(out, "text: 0x%lX - 0x%lX\n", textBegin, textEnd);
+     * g_string_append_printf(out, "target: %s\n", info->target_name);
+     * qemu_plugin_outs(out->str);
+    */
 
     return 0;
 }
