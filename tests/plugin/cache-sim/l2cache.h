@@ -16,12 +16,14 @@
 #define L2CACHE_SIZE_BYTES       (524288)
 #define L2CACHE_ASSOCIATIVITY    (8)
 #define L2CACHE_BLOCK_SIZE       (32)
-#define L2CACHE_POLICY           (POLICY_ROUND_ROBIN)
+#define L2CACHE_REPLACE_POLICY   (POLICY_ROUND_ROBIN)
+#define L2CACHE_ALLOC_POLICY     (POLICY_WRITE_ALLOCATE)
 
 
 /**************************** function prototypes *****************************/
 int l2cache_init(uint32_t cacheSize, uint32_t associativity, uint32_t blockSize,
-                cache_policy_t policy);
+                replace_policy_t replace_policy,
+                allocate_policy_t alloc_policy);
 void free_l2cache(void);
 void l2cache_cleanup(void);
 void l2cache_stats(void);

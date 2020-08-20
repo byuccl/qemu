@@ -334,11 +334,14 @@ QEMU_PLUGIN_EXPORT int qemu_plugin_install(qemu_plugin_id_t id,
 
     // init the cache simulation
     icache_init(ICACHE_SIZE_BYTES, ICACHE_ASSOCIATIVITY,
-                ICACHE_BLOCK_SIZE, ICACHE_POLICY);
+                ICACHE_BLOCK_SIZE, ICACHE_REPLACE_POLICY,
+                ICACHE_ALLOC_POLICY);
     dcache_init(DCACHE_SIZE_BYTES, DCACHE_ASSOCIATIVITY,
-                DCACHE_BLOCK_SIZE, DCACHE_POLICY);
+                DCACHE_BLOCK_SIZE, DCACHE_REPLACE_POLICY,
+                DCACHE_ALLOC_POLICY);
     l2cache_init(L2CACHE_SIZE_BYTES, L2CACHE_ASSOCIATIVITY,
-                L2CACHE_BLOCK_SIZE, L2CACHE_POLICY);
+                L2CACHE_BLOCK_SIZE, L2CACHE_REPLACE_POLICY,
+                L2CACHE_ALLOC_POLICY);
 
     // `info` argument has information about qemu system state
     // see qemu_info_t in include/qemu/qemu-plugin.h for more details
@@ -369,10 +372,10 @@ static void plugin_exit(qemu_plugin_id_t id, void* p) {
     // based on example in mem.c
     g_autoptr(GString) out = g_string_new("");
 
-    g_string_printf(out,        "insn count:           %10ld\n", insn_count);
-    g_string_append_printf(out, "load count:           %10ld\n", load_count);
-    g_string_append_printf(out, "store count:          %10ld\n", store_count);
-    g_string_append_printf(out, "cp count:             %10ld\n", cp_count);
+    g_string_printf(out,        "insn count:           %12ld\n", insn_count);
+    g_string_append_printf(out, "load count:           %12ld\n", load_count);
+    g_string_append_printf(out, "store count:          %12ld\n", store_count);
+    g_string_append_printf(out, "cp count:             %12ld\n", cp_count);
 
     qemu_plugin_outs(out->str);
 

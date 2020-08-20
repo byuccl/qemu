@@ -24,9 +24,11 @@ static cache_t dcache;
  * Initialize all of the Instruction cache structures
  */
 int dcache_init(uint32_t cacheSize, uint32_t associativity, uint32_t blockSize,
-                cache_policy_t policy)
+                replace_policy_t replace_policy,
+                allocate_policy_t alloc_policy)
 {
-    init_cache_struct(&dcache, cacheSize, associativity, blockSize, policy);
+    init_cache_struct(&dcache, cacheSize, associativity, blockSize,
+                      replace_policy, alloc_policy);
 
     atexit(dcache_cleanup);
 
@@ -53,11 +55,19 @@ void dcache_cleanup(void) {
  */
 void dcache_stats(void) {
     g_autoptr(GString) out = g_string_new("");
+
+    // compute miss rate
+    uint64_t load_total = dcache.load_hits + dcache.load_misses;
+    double loadMissRate = (double)dcache.load_misses / (double)load_total;
+    uint64_t store_total = dcache.store_hits + dcache.store_misses;
+    double storeMissRate = (double)dcache.store_misses / (double)store_total;
     
-    g_string_printf(out,        "dcache load hits:     %10ld\n", dcache.load_hits);
-    g_string_append_printf(out, "dcache load misses:   %10ld\n", dcache.load_misses);
-    g_string_append_printf(out, "dcache store hits:    %10ld\n", dcache.store_hits);
-    g_string_append_printf(out, "dcache store misses:  %10ld\n", dcache.store_misses);
+    g_string_printf(out,        "dcache load hits:     %12ld\n", dcache.load_hits);
+    g_string_append_printf(out, "dcache load misses:   %12ld\n", dcache.load_misses);
+    g_string_append_printf(out, "dcache load miss rate: %11.5f%%\n", loadMissRate*100);
+    g_string_append_printf(out, "dcache store hits:    %12ld\n", dcache.store_hits);
+    g_string_append_printf(out, "dcache store misses:  %12ld\n", dcache.store_misses);
+    g_string_append_printf(out, "dcache store miss rate: %10.5f%%\n", storeMissRate*100);
 
     qemu_plugin_outs(out->str);
 }

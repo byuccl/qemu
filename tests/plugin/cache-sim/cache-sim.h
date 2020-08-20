@@ -14,7 +14,14 @@ enum cache_policy_e {
     POLICY_ROUND_ROBIN,
     POLICY_RANDOM
 };
-typedef enum cache_policy_e cache_policy_t;
+typedef enum cache_policy_e replace_policy_t;
+
+// options for write-allocate
+enum cache_allocate_e {
+    POLICY_WRITE_ALLOCATE,
+    POLICY_NO_WRITE_ALLOCATE
+};
+typedef enum cache_allocate_e allocate_policy_t;
 
 // cache options
 enum cache_result_e {
@@ -55,7 +62,8 @@ struct cache_stats {
         uint32_t prev;              // previous index (random)
         uint32_t* round_robin;      // array of previous index
     } replace;
-    cache_policy_t policy;  // cache replacement policy
+    replace_policy_t replace_policy;    // cache replacement policy
+    allocate_policy_t alloc_policy;     // cache write-allocate policy
     cache_mask_t maskInfo;  // masks for address translation
 };
 typedef struct cache_stats cache_t;

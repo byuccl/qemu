@@ -1,0 +1,156 @@
+Notes on the cache hierarchy for the ARM Cortex-A9 as found in the Zynq-7000.  This is the architecture the plugin emulates.
+
+
+From Cortex A9 manual:
+
+For L1:
+- On a cache miss, critical word first filling of the cache is performed
+- Both data cache read misses and write misses are non-blocking with up to four outstanding data cache read misses and up to four outstanding data cache write misses being supported.
+
+The Cortex-A9 processor has a store buffer with four 64-bit slots with data merging capability. 
+
+When SCTLR.C=1 The Cortex-A9 Data Cache is enabled
+- all pages marked as Write-Through are treated as Non-Cacheable
+which seems to indicate that the cache only does write-back
+
+
+For L2:
+Table 8-3: Data side read bus, ARUSERM0[6:0]
+Bits    Name                Description
+[6]     Reserved            b0
+[5]     L2 Prefetch hint    Indicates that the read access is a prefetch hint 
+                            to the L2, and does not expect any data back
+[4:1]   Inner attributes    b0000 Strongly Ordered
+                            b0001 Device
+                            b0011 Normal Memory Non-Cacheable
+                            b0110 Write-Through
+                            b0111 Write-Back no Write-Allocate
+                            b1111 Write-Back Write-Allocate.
+[0]     Shared bit          0 Nonshared
+                            1 Shared.
+
+Table 8-4: Instruction side read bus, ARUSERM1[6:0]
+Bits    Name                Description
+[6]     Reserved            b0 
+[5]     Reserved            b0
+[4:1]   Inner attributes    b0000 Strongly Ordered
+                            b0001 Device
+                            b0011 Normal Memory Non-Cacheable
+                            b0110 Write-Through
+                            b0111 Write-Back no Write-Allocate
+                            b1111 Write-Back Write-Allocate.
+[0]     Shared bit          0 Nonshared
+                            1 Shared.
+
+Table 8-5: Data side write bus, AWUSERM0[8:0]
+Bits    Name                    Description
+[8]     Early BRESP             Indicates that the L2 slave can send an early 
+        Enable bit              BRESP answer to the write request. See Early 
+                                BRESP on page 8-7.
+[7]     Write full line         Indicates that the access is an entire cache 
+        of zeros bit            line write full of zeros. See Write full line
+                                of zeros on page 8-8.
+[6]     Clean eviction          Indicates that the write access is the eviction 
+                                of a clean cache line.
+[5]     L1 eviction             Indicates that the write access is a cache line 
+                                eviction from the L1.
+[4:1]   Inner attributes        b0000 Strongly Ordered
+                                b0001 Device
+                                b0011 Normal Memory Non-Cacheable
+                                b0110 Write-Through
+                                b0111 Write-Back no Write-Allocate
+                                b1111 Write-Back Write-Allocate.
+[0]     Shared bit              0 Nonshared
+                                1 Shared.
+
+
+From the Zynq-7000 TRM
+https://www.xilinx.com/support/documentation/user_guides/ug585-Zynq-7000-TRM.pdf
+
+Section 3.2.3
+D-Cache only supports write-back/write-allocate policy. Write-through and write-back/no write-allocate policies are not implemented.
+
+Section 3.4.1
+- Implements pseudo-random victim selection policy with deterministic option.
+  - Write-through and write-back.
+  - Read allocate, write allocate, read and write allocate.
+
+See Table 3-5 for more details
+
+There are a lot of other features, like locking, that we don't implement.
+For example, store buffer (3.4.7).
+
+
+See also TRM for L2c310 (r3p2 in Zynq-7000)
+https://developer.arm.com/documentation/ddi0246/f/?lang=en
+
+
+When read Auxiliary Control Register (3.3.4)
+Value of 0x76760001 returned
+
+01110110011101100000000000000001
+
+31:     Reserved
+30:     BRESP enabled
+29:     Instruction Prefetch enabled
+28:     Data prefetch enabled
+27:     Non-secure interrupt access control disabled
+26:     Non-secure lockdown enable
+25:     Cache replacement policy = 1 -> Round-robin (default)
+24-23:  Force write allocate = 00 -> Use AWCACHE attributes for WA
+22:     Shared attribute override enabled
+21:     Parity enabled
+20:     Event monitor bus enabled
+19-17:  Way-size = 011 -> 64KB
+16:     Associativity = 0 -> 8-way
+15-14:  Reserved
+13:     Shared Attribute Invalidate disabled
+12:     Exclusive cache configuration disabled
+11:     Store buffer device limitation disabled
+10:     High Priority for SO and Dev Reads disabled
+9-1:    Reserved
+0:      Full Line of Zero enabled
+
+
+AWCACHE is an AXI signal that is sent on each transaction.
+The AXI4 spec says what the default values for each signal are (A10.3)
+http://www.gstitt.ece.ufl.edu/courses/fall15/eel4720_5721/labs/refs/AXI4_specification.pdf
+
+Both AWCACHE and ARCACHE are optional signals, with default value of 0b0000
+0b0000 means
+- no need to be looked up in a cache
+- do not modify the transaction characteristics
+- the write response must be given from the final destination
+
+
+Zynq TRM, 3.2.4 - Memory Ordering
+Each region of memory can be Normal, Device or Strongly-ordered (memory type).
+Each region also has attributes.  Cacheability is one of them.
+
+For both L1 and L2 cache page table entries,
+TEX bits are [14:12], C bit is [3], and B bit is [2]. These define the memory attributes.
+See Table 3-3 for a description of what they do
+If the highest order bit for TEX is set, then look at Table 4 for cache attributes:
+
+Table 3-4
+
+Encoding Bits       Cache Attribute
+C       B
+--------------------------------------------------------
+0       0           Non-cacheable
+0       1           Write-back, write-allocate
+1       0           Write-through, no write-allocate
+1       1           Write-back, no write-allocate
+
+
+Looking at translation_table.S in the Xilinx BSP code, it sets the attributes of each section in there.
+https://github.com/Xilinx/embeddedsw/blob/a60c084a0862559e2fa58fd4c82b0fe39b923e33/lib/bsp/standalone/src/arm/cortexa9/gcc/translation_table.S#L20
+DDR is assigned CB = 0b01 for both inner and outer.
+This means "Write-back, write-allocate."
+
+
+
+Additional Resources:
+
+Here's a presentation that describes the meanings of different cache policies.
+http://www.cs.cornell.edu/courses/cs3410/2013sp/lecture/18-caches3-w.pdf

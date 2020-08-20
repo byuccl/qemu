@@ -23,9 +23,11 @@ static cache_t l2cache;
  * Initialize all of the Instruction cache structures
  */
 int l2cache_init(uint32_t cacheSize, uint32_t associativity, uint32_t blockSize,
-                cache_policy_t policy)
+                replace_policy_t replace_policy,
+                allocate_policy_t alloc_policy)
 {
-    init_cache_struct(&l2cache, cacheSize, associativity, blockSize, policy);
+    init_cache_struct(&l2cache, cacheSize, associativity, blockSize,
+                      replace_policy, alloc_policy);
 
     atexit(l2cache_cleanup);
 
@@ -52,11 +54,19 @@ void l2cache_cleanup(void) {
  */
 void l2cache_stats(void) {
     g_autoptr(GString) out = g_string_new("");
+
+    // compute miss rate
+    uint64_t load_total = l2cache.load_hits + l2cache.load_misses;
+    double loadMissRate = (double)l2cache.load_misses / (double)load_total;
+    uint64_t store_total = l2cache.store_hits + l2cache.store_misses;
+    double storeMissRate = (double)l2cache.store_misses / (double)store_total;
     
-    g_string_printf(out,        "l2cache load hits:    %10ld\n", l2cache.load_hits);
-    g_string_append_printf(out, "l2cache load misses:  %10ld\n", l2cache.load_misses);
-    g_string_append_printf(out, "l2cache store hits:   %10ld\n", l2cache.store_hits);
-    g_string_append_printf(out, "l2cache store misses: %10ld\n", l2cache.store_misses);
+    g_string_printf(out,        "l2cache load hits:    %12ld\n", l2cache.load_hits);
+    g_string_append_printf(out, "l2cache load misses:  %12ld\n", l2cache.load_misses);
+    g_string_append_printf(out, "l2cache load miss rate: %10.5f%%\n", loadMissRate*100);
+    g_string_append_printf(out, "l2cache store hits:   %12ld\n", l2cache.store_hits);
+    g_string_append_printf(out, "l2cache store misses: %12ld\n", l2cache.store_misses);
+    g_string_append_printf(out, "l2cache store miss rate: %9.5f%%\n", storeMissRate*100);
 
     qemu_plugin_outs(out->str);
 }

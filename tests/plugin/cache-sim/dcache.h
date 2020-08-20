@@ -17,12 +17,14 @@
 #define DCACHE_SIZE_BYTES       (32768)
 #define DCACHE_ASSOCIATIVITY    (4)
 #define DCACHE_BLOCK_SIZE       (32)
-#define DCACHE_POLICY           (POLICY_RANDOM)
+#define DCACHE_REPLACE_POLICY   (POLICY_RANDOM)
+#define DCACHE_ALLOC_POLICY     (POLICY_WRITE_ALLOCATE)
 
 
 /**************************** function prototypes *****************************/
 int dcache_init(uint32_t cacheSize, uint32_t associativity, uint32_t blockSize,
-                cache_policy_t policy);
+                replace_policy_t replace_policy,
+                allocate_policy_t alloc_policy);
 void free_dcache(void);
 void dcache_cleanup(void);
 void dcache_stats(void);

@@ -17,12 +17,15 @@
 #define ICACHE_SIZE_BYTES       (32768)
 #define ICACHE_ASSOCIATIVITY    (4)
 #define ICACHE_BLOCK_SIZE       (32)
-#define ICACHE_POLICY           (POLICY_RANDOM)
+#define ICACHE_REPLACE_POLICY   (POLICY_RANDOM)
+// I-cache shouldn't be writing anyway
+#define ICACHE_ALLOC_POLICY     (POLICY_NO_WRITE_ALLOCATE)
 
 
 /**************************** function prototypes *****************************/
 int icache_init(uint32_t cacheSize, uint32_t associativity, uint32_t blockSize,
-                cache_policy_t policy);
+                replace_policy_t replace_policy,
+                allocate_policy_t alloc_policy);
 void free_icache(void);
 void icache_cleanup(void);
 void icache_stats(void);

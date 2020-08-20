@@ -24,7 +24,8 @@
 /**************************** function prototypes *****************************/
 int init_cache_struct(cache_t* cp, uint32_t cacheSize, 
                         uint32_t associativity, uint32_t blockSize,
-                        cache_policy_t policy);
+                        replace_policy_t replace_policy,
+                        allocate_policy_t alloc_policy);
 void free_cache_struct(cache_t* cp);
 cache_result_t cache_load_common(cache_t* cp, uint64_t vaddr);
 cache_result_t cache_store_common(cache_t* cp, uint64_t vaddr);
