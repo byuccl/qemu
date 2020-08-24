@@ -565,11 +565,14 @@ QEMU_PLUGIN_EXPORT int qemu_plugin_install(qemu_plugin_id_t id,
     // init the cache simulation
     // TODO: should we make this parametrized by socket as well?
     icache_init(ICACHE_SIZE_BYTES, ICACHE_ASSOCIATIVITY,
-                ICACHE_BLOCK_SIZE, ICACHE_POLICY);
+                ICACHE_BLOCK_SIZE, ICACHE_REPLACE_POLICY,
+                ICACHE_ALLOC_POLICY);
     dcache_init(DCACHE_SIZE_BYTES, DCACHE_ASSOCIATIVITY,
-                DCACHE_BLOCK_SIZE, DCACHE_POLICY);
+                DCACHE_BLOCK_SIZE, DCACHE_REPLACE_POLICY,
+                DCACHE_ALLOC_POLICY);
     l2cache_init(L2CACHE_SIZE_BYTES, L2CACHE_ASSOCIATIVITY,
-                L2CACHE_BLOCK_SIZE, L2CACHE_POLICY);
+                L2CACHE_BLOCK_SIZE, L2CACHE_REPLACE_POLICY,
+                L2CACHE_ALLOC_POLICY);
 
     // register the functions in this file
     qemu_plugin_register_vcpu_tb_trans_cb(id, put_cbs_in_tbs);
