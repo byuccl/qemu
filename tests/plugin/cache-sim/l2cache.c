@@ -69,6 +69,13 @@ void l2cache_stats(void) {
     g_string_append_printf(out, "l2cache store miss rate: %9.5f%%\n", storeMissRate*100);
 
     qemu_plugin_outs(out->str);
+
+    // more stats about compulsory misses and evictions
+    g_string_printf(out,        "l2cache compulsory misses:%8ld\n",
+                    l2cache.miss_type_counts.compulsory);
+    g_string_append_printf(out, "l2cache evictions:    %12ld\n",
+                    l2cache.miss_type_counts.evictions);
+    qemu_plugin_outs(out->str);
 }
 
 

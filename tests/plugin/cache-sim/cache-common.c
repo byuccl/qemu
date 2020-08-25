@@ -10,6 +10,12 @@
 
 #include "cache-common.h"
 
+#ifdef ENABLE_DEBUG_CACHE_STRUCTS
+// for printing
+#include <glib.h>
+#include <qemu-plugin.h>
+#endif
+
 
 /********************************* functions **********************************/
 
@@ -70,6 +76,13 @@ int init_cache_struct(cache_t* cp, uint32_t cacheSize,
     // cache struct is now valid
     cp->validFlag = 1;
 
+    // debug
+    #ifdef ENABLE_DEBUG_CACHE_STRUCTS
+    g_autoptr(GString) out = g_string_new("");
+    g_string_printf(out, "num blocks: %d\n", cp->cacheSize / cp->blockSize);
+    qemu_plugin_outs(out->str);
+    #endif
+
     return 0;
 }
 
@@ -97,8 +110,8 @@ void free_cache_struct(cache_t* cp)
  * Local helper function.
  */
 static cache_entry_t* cache_get_next_victim(cache_t* cp,
-                                     cache_entry_t* cacheRow,
-                                     uint32_t rowIdx)
+                                    cache_entry_t* cacheRow,
+                                    uint32_t rowIdx)
 {
     // keep track of next victim
     uint32_t nextRowIdx = 0;
@@ -128,6 +141,69 @@ static cache_entry_t* cache_get_next_victim(cache_t* cp,
 
 
 /*
+ * Get the next spot in the selected cache row that is empty,
+ *  that is, still has the dirty bit set.
+ * Can possibly return NULL if none are still dirty.
+ * Tracks compulsory misses, which will also give an idea of how much
+ *  of the total cache memory is being used by the program.
+ */
+static cache_entry_t* cache_get_next_empty(cache_t* cp,
+                                    cache_entry_t* cacheRow)
+{
+    int i;
+    // NULL means didn't find anything
+    cache_entry_t* foundSpot = NULL;
+
+    // look for invalid places to put it
+    for (i = 0; i < cp->associativity; i+=1) {
+        if (cacheRow[i].dirty == CACHE_DIRTY) {
+            foundSpot = &cacheRow[i];
+            break;
+        }
+    }
+
+    return foundSpot;
+}
+
+
+/*
+ * Checks to see if any of the blocks the specified cache row
+ *  match the given tag bits.
+ */
+static cache_result_t cache_check_resident(cache_t* cp,
+                                    cache_entry_t* cacheRow,
+                                    arch_word_t tagBits)
+{
+    int i;
+    cache_result_t result = CACHE_RESULT_MISS;
+
+    for (i = 0; i < cp->associativity; i+=1) {
+        // if valid and tag matches
+        if ( (cacheRow[i].dirty == CACHE_NOT_DIRTY) && (cacheRow[i].tag == tagBits) ) {
+            result = CACHE_RESULT_HIT;
+            break;
+        }
+    }
+
+    return result;
+}
+
+
+/*
+ * Update a cache block entry by making sure the valid bit is set
+ *  and the tag bits have been changed.
+ */
+static void cache_update_block(cache_entry_t* block,
+                            arch_word_t tagBits)
+{
+    block->dirty = CACHE_NOT_DIRTY;
+    block->tag = tagBits;
+
+    return;
+}
+
+
+/*
  * See if a given address is in the cache.
  * If it's not, update the cache table to include the relevant block.
  */
@@ -150,16 +226,9 @@ cache_result_t cache_load_common(cache_t* cp, uint64_t vaddr)
     cache_entry_t* cacheRow = cp->table[rowIdx];
 
     // check all the entries in the row
-    int i;
-    cache_result_t result = CACHE_RESULT_MISS;
-    for (i = 0; i < cp->associativity; i+=1) {
-        // if valid and tag matches
-        if ( (!cacheRow[i].dirty) && (cacheRow[i].tag == tagBits) ) {
-            result = CACHE_RESULT_HIT;
-            break;
-        }
-    }
+    cache_result_t result = cache_check_resident(cp, cacheRow, tagBits);
 
+    // check result - if found, short circuit
     if (result) {
         cp->load_hits += 1;
         return CACHE_RESULT_HIT;
@@ -169,23 +238,28 @@ cache_result_t cache_load_common(cache_t* cp, uint64_t vaddr)
     // otherwise, load the next address
     cache_entry_t* foundSpot = NULL;
     // first look for invalid places to put it
-    for (i = 0; i < cp->associativity; i+=1) {
-        if (cacheRow[i].dirty) {
-            foundSpot = &cacheRow[i];
-            break;
-        }
-    }
+    foundSpot = cache_get_next_empty(cp, cacheRow);
     // otherwise, get next victim
     if (foundSpot == NULL) {
         foundSpot = cache_get_next_victim(cp, cacheRow, rowIdx);
     }
 
-    // NOTE: we can track conflict misses here if we want by checking if the evicted
-    //  spot had the valid bit set
+    // here we track compulsory misses and evictions so we can try to detect thrashing
+    if (foundSpot->dirty == CACHE_DIRTY) {
+        cp->miss_type_counts.compulsory += 1;
+        #ifdef ENABLE_DEBUG_CACHE_STRUCTS
+        if (cp->debugFlag) {
+            g_autoptr(GString) out = g_string_new("");
+            g_string_printf(out, "miss: 0x%04X, 0x%04X\n", rowIdx, tagBits);
+            qemu_plugin_outs(out->str);
+        }
+        #endif
+    } else {
+        cp->miss_type_counts.evictions += 1;
+    }
 
     // update the memory spot
-    foundSpot->dirty = CACHE_NOT_DIRTY;
-    foundSpot->tag = tagBits;
+    cache_update_block(foundSpot, tagBits);
 
     return CACHE_RESULT_MISS;
 }
@@ -211,38 +285,35 @@ cache_result_t cache_store_common(cache_t* cp, uint64_t vaddr)
     cache_entry_t* cacheRow = cp->table[rowIdx];
 
     // check all the entries in the row
-    int i;
-    cache_result_t result = CACHE_RESULT_MISS;
-    for (i = 0; i < cp->associativity; i+=1) {
-        // if valid and tag matches
-        if ( (!cacheRow[i].dirty) && (cacheRow[i].tag == tagBits) ) {
-            result = CACHE_RESULT_HIT;
-            break;
-        }
+    cache_result_t result = cache_check_resident(cp, cacheRow, tagBits);
+
+    // record result - if found, short circuit
+    if (result) {
+        cp->store_hits += 1;
+        return CACHE_RESULT_HIT;
     }
+    cp->store_misses += 1;
 
     // if write allocate
     if (cp->alloc_policy == POLICY_WRITE_ALLOCATE) {
         // otherwise, load the next address
         cache_entry_t* foundSpot = NULL;
         // first look for invalid places to put it
-        for (i = 0; i < cp->associativity; i+=1) {
-            if (cacheRow[i].dirty) {
-                foundSpot = &cacheRow[i];
-                break;
-            }
-        }
+        foundSpot = cache_get_next_empty(cp, cacheRow);
         // otherwise, get next victim
         if (foundSpot == NULL) {
             foundSpot = cache_get_next_victim(cp, cacheRow, rowIdx);
         }
+        // track compulsory misses and evictions to try to detect thrashing
+        if (foundSpot->dirty == CACHE_DIRTY) {
+            cp->miss_type_counts.compulsory += 1;
+        } else {
+            cp->miss_type_counts.evictions += 1;
+        }
+        // update the spot with new tag bits
+        cache_update_block(foundSpot, tagBits);
     }
 
-    if (result) {
-        cp->store_hits += 1;
-        return CACHE_RESULT_HIT;
-    }
-    cp->store_misses += 1;
     return CACHE_RESULT_MISS;
 }
 

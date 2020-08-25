@@ -21,6 +21,10 @@
 // I-cache shouldn't be writing anyway
 #define ICACHE_ALLOC_POLICY     (POLICY_NO_WRITE_ALLOCATE)
 
+// This means that the counters for compulsory misses will be reset
+//  when the cache is invalidated.
+#define RESET_COMPULSORY_ON_INVALIDATE
+
 
 /**************************** function prototypes *****************************/
 int icache_init(uint32_t cacheSize, uint32_t associativity, uint32_t blockSize,

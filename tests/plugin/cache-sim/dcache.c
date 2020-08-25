@@ -70,6 +70,13 @@ void dcache_stats(void) {
     g_string_append_printf(out, "dcache store miss rate: %10.5f%%\n", storeMissRate*100);
 
     qemu_plugin_outs(out->str);
+
+    // more stats about compulsory misses and evictions
+    g_string_printf(out,        "dcache compulsory misses: %8ld\n",
+                    dcache.miss_type_counts.compulsory);
+    g_string_append_printf(out, "dcache evictions:     %12ld\n",
+                    dcache.miss_type_counts.evictions);
+    qemu_plugin_outs(out->str);
 }
 
 

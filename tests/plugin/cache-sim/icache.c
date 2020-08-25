@@ -29,6 +29,9 @@ int icache_init(uint32_t cacheSize, uint32_t associativity, uint32_t blockSize,
 {
     init_cache_struct(&icache, cacheSize, associativity, blockSize,
                       replace_policy, alloc_policy);
+    #ifdef ENABLE_DEBUG_CACHE_STRUCTS
+    icache.debugFlag = 1;
+    #endif
 
     atexit(icache_cleanup);
 
@@ -64,6 +67,13 @@ void icache_stats(void) {
     g_string_append_printf(out, "icache load misses:   %12ld\n", icache.load_misses);
     g_string_append_printf(out, "icache load miss rate: %11.5f%%\n", loadMissRate*100);
 
+    qemu_plugin_outs(out->str);
+
+    // more stats about compulsory misses and evictions
+    g_string_printf(out,        "icache compulsory misses: %8ld\n",
+                    icache.miss_type_counts.compulsory);
+    g_string_append_printf(out, "icache evictions:     %12ld\n",
+                    icache.miss_type_counts.evictions);
     qemu_plugin_outs(out->str);
 }
 
@@ -141,4 +151,8 @@ void icache_invalidate_all(void)
             cache_invalidate_block_common(&icache, row, way);
         }
     }
+    #ifdef RESET_COMPULSORY_ON_INVALIDATE
+    // This should also reset the compulsory miss count
+    icache.miss_type_counts.compulsory = 0;
+    #endif
 }
