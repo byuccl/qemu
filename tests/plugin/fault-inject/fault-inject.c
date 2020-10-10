@@ -68,6 +68,9 @@ static uint64_t tb_count = 0;
 static uint64_t uniq_insn_count = 0;
 static uint64_t textBegin = 0, textEnd = 0;     // begin and end addresses of .text
 static uint64_t mainBegin = 0;
+static uint64_t otherCycle = 0;
+static uint64_t otherCycleSkip = 0;
+static uint64_t otherCycleCount = 0;
 
 #ifdef DEBUG_INSN_DISAS
 char lastInsnStr[LAST_INSN_BUF_SIZE];
@@ -131,7 +134,7 @@ static void put_cbs_in_tbs(qemu_plugin_id_t id, struct qemu_plugin_tb* tb) {
     // do stuff the first time
     if (!tb_count) {
         // look for data from the socket
-        if (!tb_count && doInject) {
+        if (doInject) {
             // get sleep cycles only here
             char* argStr;
             argStr = sockets_recv();
@@ -144,13 +147,27 @@ static void put_cbs_in_tbs(qemu_plugin_id_t id, struct qemu_plugin_tb* tb) {
         } else {
             // ask for what the address of main() is so we can tell how many
             //  cycles it takes to get there
+            // We also support requesting other specific address cycle counts - unstable
             char* argStr;
             argStr = sockets_recv();
             mainBegin = strtoul(argStr, NULL, 10);
             free(argStr);
             g_autoptr(GString) out = g_string_new("");
-            // to get it to print
-            g_string_printf(out, "INFO: main() starts at 0x%lX\n", mainBegin);
+            // special value of 0 means it's not actually main
+            if (mainBegin == 0) {
+                // get the next value instead
+                argStr = sockets_recv();
+                otherCycle = strtoul(argStr, NULL, 10);
+                free(argStr);
+                // then how many times to pass it (like GDB breakpoint)
+                argStr = sockets_recv();
+                otherCycleSkip = strtoul(argStr, NULL, 10);
+                free(argStr);
+                g_string_printf(out, "INFO: otherAddr specified: 0x%lX; hit %lu times\n", otherCycle, otherCycleSkip);
+            } else {
+                // to get it to print
+                g_string_printf(out, "INFO: main() starts at 0x%lX\n", mainBegin);
+            }
             qemu_plugin_outs(out->str);
         }
     }
@@ -230,13 +247,32 @@ static void parse_instruction(unsigned int vcpu_index, void* userdata)
     check_insn_count();
 
     // see if we've hit main
-    if ( (!doInject) && (vaddr >= mainBegin) )
-    {
-        g_autoptr(GString) out = g_string_new("");
-        g_string_printf(out, "0x%08lX", insn_count);
-        sockets_send(out->str, out->len);
-        // reset mainBegin to be max int
-        mainBegin = UINT64_MAX;
+    if (!doInject) {
+        if (mainBegin == 0) {
+            // dangerous match
+            if (vaddr == otherCycle) {
+                // we've hit it another time
+                otherCycleCount += 1;
+                if (otherCycleCount == otherCycleSkip) {
+                    g_autoptr(GString) out = g_string_new("");
+                    g_string_printf(out, "0x%08lX", insn_count);
+                    sockets_send(out->str, out->len);
+                    // debug print
+                    g_string_printf(out, "INFO: reached 0x%lX at %lu cycles\n", otherCycle, insn_count);
+                    qemu_plugin_outs(out->str);
+                }
+            }
+        } else if (vaddr >= mainBegin) {
+            // conservative match
+            g_autoptr(GString) out = g_string_new("");
+            g_string_printf(out, "0x%08lX", insn_count);
+            sockets_send(out->str, out->len);
+            // reset mainBegin to be max int
+            mainBegin = UINT64_MAX;
+            // debug print
+            g_string_printf(out, "INFO: reached main() at %lu cycles\n", insn_count);
+            qemu_plugin_outs(out->str);
+        }
     }
 }
 
