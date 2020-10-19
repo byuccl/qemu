@@ -92,7 +92,7 @@ static const uint8_t  LDST_UNPRIV_MASK   = 0x12;    // bits 1 and 4 of 5 total
 static const uint8_t  LDST_UNPRIV_BITS   = 0x02;    // only bit 1 is set
 static const uint32_t LDST_RT_BITS_MASK  = CREATE_BIT_MASK(4) << 12;
 static const uint16_t LDST_IMM12_MASK    = CREATE_BIT_MASK(12);
-static const uint16_t LDST_IMM5_MASK     = CREATE_BIT_MASK(5) << 7;
+// static const uint16_t LDST_IMM5_MASK     = CREATE_BIT_MASK(5) << 7;
 static const uint8_t  LDST_RM_BITS_MASK  = CREATE_BIT_MASK(4);
 static const uint8_t  LDST_TYPE_MASK     = CREATE_BIT_MASK(2) << 5;
 
